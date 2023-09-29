@@ -6,7 +6,7 @@ This model uses recent trends in emissions to estimate future impact on climate.
 
 ## Assumptions    
 - **Renewable Energy** will be estimated by a logistic curve fitted to existing growth to reach 100% of market. This will have significant uncertainty.  
-- **Fossil Energy** will be the remaining energy requirement. Coal, Oil and gas will each trend within the market share as in the recent pass.  
+- **Fossil Energy** will be the remaining energy requirement. Coal, Oil and gas will each trend within the market share as in the recent past.  
 - **Energy Demand** will decrease with the increase in renewable energy, with the assumption that the electrification of demands will cause more efficient use of energy, either at the electricity generation plant or for internal combustion engines.  
 - **Agriculture Emissions** will trend as is.  
 - **Concrete Emissions** will trend as is.
@@ -16,6 +16,6 @@ This model uses recent trends in emissions to estimate future impact on climate.
 - **Pollution** will trend with fossil energy production
 
 ## Data  
-Data will be downloaded from the source where possible. the `specs.yaml` file contains details of where each file is from, and how that file was imported.
+Data will be downloaded from the source where possible. The `specs.yaml` file contains details of where each file is from, and how that file was imported.
 
 
