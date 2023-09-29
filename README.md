@@ -13,7 +13,8 @@ This model uses recent trends in emissions to estimate future impact on climate.
 - **Industrial Emissions** will trend as is.
 - **Air Travel and Ocean Shipping** will trend as is, except a portion of ocean shipping will decrease with fossil fuel production.  
 - **Methane Emissions** will trend with fossil energy production, except for the portion produced by agriculture.  
-- **Pollution** will trend with fossil energy production
+- **Pollution** will trend with fossil energy production.  
+- **Land Use** will be unchanged.  
 
 ## Data  
 Data will be downloaded from the source where possible. The `specs.yaml` file contains details of where each file is from, and how that file was imported.
