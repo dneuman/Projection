@@ -15,6 +15,7 @@ This model uses recent trends in emissions to estimate future impact on climate.
 - **Methane Emissions** will trend with fossil energy production, except for the portion produced by agriculture.  
 - **Pollution** will trend with fossil energy production.  
 - **Land Use** will be unchanged.  
+- **CFCs and other GHGs** will continue trend.
 
 ## Data  
 Data will be downloaded from the source where possible. The `specs.yaml` file contains details of where each file is from, and how that file was imported.
