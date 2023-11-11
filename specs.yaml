@@ -3,197 +3,148 @@
 #   don't include header: if there are no headers
 
 # File Info
-modern: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah', 'mei']
+modern: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah', 'mei', 'enso',
+        'pdo', 'solar']
 special: []
 temperature: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah']
 pie_offset: 0.3117 # temperature offset from pre-industrial era to 1961-1990
 
 # Modern Temperatures
 best:
+  name: 'Berkeley Earth'
   url: 'https://berkeley-earth-temperature.s3.us-west-1.amazonaws.com/Global/Land_and_Ocean_complete.txt'
-  sep: '\s+'
-  names: ['Year', 'Month', 'Data', 'Error']
-  index_col: 0
-  usecols: [0, 1, 2, 3]
-  comment: '%'
-  parse_dates: {'Date':['Year', 'Month']}
+  format:
+    sep: '\s+'
+    names: ['Year', 'Month', 'Data', 'Error']
+    index_col: 0
+    usecols: [0, 1, 2, 3]
+    comment: '%'
+    parse_dates: {'Date':['Year', 'Month']}
   start_year: 1850
   start_month: 1
-  name: 'Berkeley Earth'
   save_as: 'best_monthly.txt'
 
 hadcrut:
-  url: 'https://www.metoffice.gov.uk/hadobs/hadcrut5/data/current/analysis/diagnostics/HadCRUT.5.0.1.0.analysis.summary_series.global.monthly.csv'
-  sep: ','
-  header: 0
-  usecols: [0, 1, 2, 3]
-  skipinitialspace: True
-  names: ['Date', 'Data', 'Err5', 'Err95']
-  date_format: {'Date': '%Y-%m'}
-  index_col: 0
   name: 'Hadcrut5'
+  url: 'https://www.metoffice.gov.uk/hadobs/hadcrut5/data/current/analysis/diagnostics/HadCRUT.5.0.1.0.analysis.summary_series.global.monthly.csv'
+  format:
+    sep: ','
+    header: 0
+    usecols: [0, 1, 2, 3]
+    skipinitialspace: True
+    names: ['Date', 'Data', 'Err5', 'Err95']
+    date_format: {'Date': '%Y-%m'}
+    index_col: 0
   save_as: 'hadcrut5_monthly.txt'
 
 giss:
-  url: 'https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv'
-  sep: ','
-  header: 0
-  skiprows: 2
-  usecols: [0, 13]
-  names: ['Year', 'Data']
-  index_col: 0
-  na_values: '***'
   name: 'GISTEMP v4'
+  url: 'https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv'
+  format:
+    sep: ','
+    header: 0
+    skiprows: 2
+    usecols: [0, 13]
+    names: ['Year', 'Data']
+    index_col: 0
+    na_values: '***'
   save_as: 'gistemp.txt'
 
 noaa:
-  url: 'https://www.ncdc.noaa.gov/cag/global/time-series/globe/land_ocean/12/12/1880-2020/data.csv'
-  sep: ','
-  header: 0
-  skiprows: 5
-  usecols: [0, 1]
-  names: ['Year', 'Data']
-  index_col: 0
   name: 'NOAA'
+  url: 'https://www.ncdc.noaa.gov/cag/global/time-series/globe/land_ocean/12/12/1880-2020/data.csv'
+  format:
+    sep: ','
+    header: 0
+    skiprows: 5
+    usecols: [0, 1]
+    names: ['Year', 'Data']
+    index_col: 0
   save_as: 'noaa.txt'
 
 jma:
-  url: 'https://ds.data.jma.go.jp/tcc/tcc/products/gwp/temp/list/csv/mon_wld.csv'
-  sep: ','
-  header: 0
-  index_col: 0
-  table: True
   name: 'Japan Met Agency'
+  url: 'https://ds.data.jma.go.jp/tcc/tcc/products/gwp/temp/list/csv/mon_wld.csv'
+  format:
+    sep: ','
+    header: 0
+    index_col: 0
+  table: True
   save_as: 'jma.txt'
   
 uah:
+  name: 'UAH v6.0'
   url: 'https://www.nsstc.uah.edu/data/msu/v6.0/tlt/uahncdc_lt_6.0.txt'
-  sep: '\s+'
-  header: 0
-  usecols: [0, 1, 2]
-  names: ['Year', 'Month', 'Data']
-  parse_dates: {'Date':['Year', 'Month']}
-  index_col: 0
+  format:
+    sep: '\s+'
+    header: 0
+    usecols: [0, 1, 2]
+    names: ['Year', 'Month', 'Data']
+    parse_dates: {'Date':['Year', 'Month']}
+    index_col: 0
   start_year: 1978
   start_month: 12
-  name: 'UAH v6.0'
   save_as: 'uah.txt'
   
 # Other modern data
 
+enso: 
+  name: 'El Nino Southern Oscillation Index'
+  url: 'https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices'
+  format:
+    sep: '\s+'
+    header: 0
+    usecols: [0, 1, 3, 5, 7, 9]
+    parse_dates: {'Date':['Year', 'Month']}
+    date_format: {'Year': '%Y', 'Month': '%m'}
+    index_col: 0
+    names: ['Year', 'Month', 'N12', 'N3', 'N4', 'N34']  
+  save_as: 'enso.txt'
+
 mei:
-  url: 'https://psl.noaa.gov/enso/mei/data/meiv2.data'
-  sep: '\s+'
-  start_year: 1979
-  index_col: 0
-  skiprows: 1
-  na_values: -999.00
-  table: True
   name: 'Multivariate ENSO Index'
+  url: 'https://psl.noaa.gov/enso/mei/data/meiv2.data'
+  format:
+    sep: '\s+'
+    index_col: 0
+    skiprows: 1
+    na_values: -999.00
+  start_year: 1979
+  table: True
   save_as: 'mei.txt'
+  
+pdo:
+  name: 'Pacific Decadal Oscillation'
+  url: 'https://www.ncei.noaa.gov/pub/data/cmb/ersst/v5/index/ersst.v5.pdo.dat'
+  format:
+    sep: '\s+'
+    na_values: 99.99
+    skiprows: 1
+    header: 0
+    index_col: 0
+  table: True
+  save_as: 'pdo.txt'
+
+solar:
+  name: 'Solar Activity: SATIRE-T and -S'
+  doi: https://doi.org/10.17617/1.5U
+  info: http://www2.mps.mpg.de/projects/sun-climate/data.html
+  url: http://www2.mps.mpg.de/projects/sun-climate/data/SATIRE-T_SATIRE-S_TSI_1850_20230708.txt
+  format:
+    sep: '\s+'
+    comment: ';'
+    header: 0
+    index_col: 0
+    skiprows: 1
+    names: ['Date', 'Data']
+  origin: 'julian'
+  save_as: 'solar.txt'
 
 # Historic data
 
-lmr:
-  name: 'Perkins and Hakim (2021)'
-  url: 'https://atmos.washington.edu/~hakim/lmr/'
-  cite: >
-    Perkins, W. A., and G. J. Hakim, 2021: Coupled atmosphere--ocean
-    reconstruction of the last millennium using online data assimilation.
-    Paleoceanogr. Paleoclimatol., 36, e2020PA003959.
-  doi: 10.1029/2020PA003959
-  raw: 'tas_sfc_indices.nc'
-  save_as: 'lmr.txt'
-  offset: 0.1982
-  
-pages:
-  name: 'PAGES2k (2019)'
-  url: 'https://www.ncdc.noaa.gov/paleo-search/study/26872'
-  cite:
-    'PAGES2k Consortium: Raphael Neukom, Luis A. Barboza, Michael P. Erb,
-     Feng Shi, Julien Emile-Geay, Michael N. Evans, Jörg Franke,
-     Darrell S. Kaufman, Lucie Lücke, Kira Rehfeld, Andrew Schurer, Feng Zhu,
-     Stefan Brönnimann, Gregory J. Hakim, Benjamin J. Henley,
-     Fredrik Charpentier Ljungqvist, Nicholas McKay, Veronika Valler,
-     Lucien von Gunten. 2019.
-     Consistent multidecadal variability in global
-     temperature reconstructions and simulations over the Common Era.
-     Nature Geoscience, 12.'
-  doi: 10.1038/s41561-019-0400-0
-  offset: 0.324462
-  save_as: 'pages.txt'
-
-marcott:
-  name: 'Marcott et al (2013)'
-  url: 'http://www.appstate.edu/~perrylb/Courses/Peru/5015/Readings/Marcott_etal_2013.pdf'
-  offset: -0.461347
-  save_as: 'marcott.txt'
-
-t12k:
-  name: 'Temperature12K (2020)'
-  url: https://www.ncdc.noaa.gov/paleo/study/29712
-  cite:
-    Darrell Kaufman, Nicholas McKay, Cody Routson,
-    Michael Erb, Christoph Dätwyler, Philipp Sommer,
-    Oliver Heiri, Basil Davis. 2020. Holocene global mean
-    surface temperature, a multi-method reconstruction
-    approach.
-  doi: 10.1038/s41597-020-0530-7
-  save_as: 'temp12k.txt'
-
-t24k:
-  name: 'Osman, Tierney, Zhu et al (2021)'
-  cite:
-    Osman, M.B., Tierney, J.E., Zhu, J. et al. Globally resolved
-    surface temperatures since the Last Glacial Maximum.
-    Nature 599, 239–244 (2021).
-  doi: 10.1038/s41586-021-03984-4
-  url: https://www.ncdc.noaa.gov/paleo/study/33112
-  src: https://www.ncei.noaa.gov/pub/data/paleo/reconstructions/osman2021/LGMR_GMST_climo.nc
-  offset: -0.0344
-  raw: 'LGMR_GMST_climo.nc'
-  save_as: 't24k.txt'
-  
-lgmr:
-  name: 'Osman, Tierney, Zhu et al (2021)'
-  cite:
-    Osman, M.B., Tierney, J.E., Zhu, J. et al. Globally resolved
-    surface temperatures since the Last Glacial Maximum.
-    Nature 599, 239–244 (2021).
-  doi: 10.1038/s41586-021-03984-4
-  url: https://www.ncdc.noaa.gov/paleo/study/33112
-  src: https://www.ncei.noaa.gov/pub/data/paleo/reconstructions/osman2021/LGMR_GMST_climo.nc
-  raw: 'LGMR_SAT_climo.nc'
-  save_as: 'lgmr.txt'
-
-
-lisiecki:
-  name: 'Lisiecki, Raymo (2005)'
-  url: http://www.lorraine-lisiecki.com/LisieckiRaymo2005.pdf
-  cite:
-    L.E. Lisiecki, and M.E. Raymo, "A Pliocene-Pleistocene stack of
-    57 globally distributed benthic δ18O records", Paleoceanography,
-    vol. 20, 2005
-  offset: -18.0807
-  scale: 1.1285
-  src: http://www.lorraine-lisiecki.com/LR04stack.txt
-  save_as: 'lisiecki.txt'
-
-zachos:
-  name: 'Zachos et al (2001)'
-  cite:
-    Zachos, J., M. Pagani, L. Sloan, E. Thomas, and K. Billups.  2001.
-    Trends, Rhythms, and Aberrations in Global Climate 65 Ma to Present.
-    Science,  Vol. 292, No. 5517, pp. 686-693, 27 April 2001.
-  doi: 10.1126/science.1059412
-  url: http://web.gps.caltech.edu/classes/ge140a/Stable_Isotope_W19/Problem_Sets_files/Zachos%202001.pdf
-  src: http://www.columbia.edu/~mhs119/Sensitivity+SL+CO2/Table.txt,\n
-       https://www.ncdc.noaa.gov/paleo-search/study/8674
-  save_as: 'zachos.txt'
-
 co2composite:
   name: 'Bereiter, Eggleston, et al (2015), NCDC Study 17975'
-  url: 'https://www.ncdc.noaa.gov/paleo/study/17975'
+  info: 'https://www.ncdc.noaa.gov/paleo/study/17975'
   cite:
     Bernhard Bereiter, Sarah Eggleston, Jochen Schmitt, Christoph Nehrbass-Ahles,
     Thomas F. Stocker, Hubertus Fischer, Sepp Kipfstuhl and Jerome Chappellaz.
@@ -204,7 +155,7 @@ co2composite:
 
 co2ml:
   name: 'Scripps Mauna Loa'
-  url: https://scrippsco2.ucsd.edu/data/atmospheric_co2/primary_mlo_co2_record.html
+  info: https://scrippsco2.ucsd.edu/data/atmospheric_co2/primary_mlo_co2_record.html
   cite:
       C. D. Keeling, S. C. Piper, R. B. Bacastow, M. Wahlen,
       T. P. Whorf, M. Heimann, and H. A. Meijer,
@@ -216,7 +167,7 @@ co2ml:
 
 sulfates:
   name: 'Haustein, Otto, et al (2019)'
-  url: https://journals.ametsoc.org/view/journals/clim/32/16/jcli-d-18-0555.1.xml
+  info: https://journals.ametsoc.org/view/journals/clim/32/16/jcli-d-18-0555.1.xml
   cite:
     Haustein, K., Otto, F. E. L., Venema, V., Jacobs, P., Cowtan, K.,
     Hausfather, Z., Way, R. G., White, B., Subramanian, A., & Schurer, A. P.
@@ -226,34 +177,30 @@ sulfates:
   save_as: 'sulfates.txt'
 
 satire:
-  name: 'Solar Activity: SATIRE-M and -T (2019)'
-  url: http://www2.mps.mpg.de/projects/sun-climate/data.html
+  name: 'Solar Activity: SATIRE-M and -T'
+  info: http://www2.mps.mpg.de/projects/sun-climate/data.html
   note:
     name: ['Dalton\nMinimum', 'Maunder\nMinimum', 'Spörer\nMinimum',
             'Wolf\nMinimum', 'Medieval\nOptimum', 'Oort\nMinimum']
     va: ['top', 'top', 'bottom', 'top', 'bottom', 'top', ]
     Year: [1840, 1690, 1470, 1290, 1190, 1040]
     Data: [-0.25, -0.4, -0.15, -0.35, 0.15, -0.3]
+  doi: https://doi.org/10.17617/1.5U
   save_as: 'satire.txt'
 
 volcano_forcing:
   name: 'Volcano Forcing, IPPC AR5 WG1 (2013) Table All.1.2'
-  url: http://www.climatechange2013.org/images/report/WG1AR5_AIISM_Datafiles.xlsx
+  info: http://www.climatechange2013.org/images/report/WG1AR5_AIISM_Datafiles.xlsx
   save_as: 'volcano_forcing.txt'
 
 land:
   name: 'Land Use Change, IPPC AR5 WG1 (2013) Table All.1.2'
-  url: http://www.climatechange2013.org/images/report/WG1AR5_AIISM_Datafiles.xlsx
+  info: http://www.climatechange2013.org/images/report/WG1AR5_AIISM_Datafiles.xlsx
   save_as: 'land.txt'
-
-law_dome:
-  name: 'CH4, N2O: Etheridge, D.M., et al. (2010)'
-  url: http://www.ncdc.noaa.gov/paleo/study/9959
-  save_as: 'law_dome.txt'
 
 ghg:
   name: 'Greenhouse Gases: NOAA Annual Greenhouse Gas Index'
-  url: www.esrl.noaa.gov/gmd/aggi/aggi.html
+  info: http://www.esrl.noaa.gov/gmd/aggi/aggi.html
   save_as: 'ghg.txt'
 
 forcing:
