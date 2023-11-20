@@ -19,6 +19,8 @@ plt.style.use('clean')
 
 yn, mn, dn, en, sn = ['Year', 'Month', 'Data', 'Error', 'Smooth']
 
+# %% Data Tools
+
 def get_impulse(n, monthly=False):
     """ Return annual (default) or monthly warming curve based on 
         Caldeira and Myhrvold 2013, Using 3 exponent model with mean values
@@ -182,31 +184,119 @@ def calc_volcano(end=None):
     vol_df[:] *= react[-77.5:77.5].values.T
     vol = vol_df.mean(axis=1)
     vol.fillna(0, inplace=True)
-    # add heating curve to volcanic values by convolution
-    cvol = convolve_impulse(vol, monthly=True)
-    return cvol
+    return vol
 
-def compile_vars(source='hadcrut', index='N34'):
-    temp = ds.load_modern(source, annual=False)
-    start = '1980-01-01'
+# %% Data Processing
+
+def compile_vars(source='hadcrut'):
+    """ Return DataFrame containing temperature, trend line, detrended 
+        temperature, and environmental factors that might affect temperature.
+    """
+    temp = ds.load_modern(source, annual=False)    
+    start = pd.to_datetime('1980-01-01')
     end = temp.index[-1]
-    temp = temp.loc[start:end]
+    temp = temp.loc[start:end, 'Data']
     df = pd.DataFrame(index=temp.index)
-    df['vol'] = calc_volcano((end.year, end.month))
-    df['enso'] = dst.enso()[index].loc[start:end]
-    df['pdo'] = dst.pdo().loc[start:end]
-    solar = dst.solar().loc[start:end]
-    csolar = convolve_impulse(solar, monthly=True)
-    df['solar'] = csolar
-    
-    # detrend temperature
-    xi = np.arange(len(temp))
+    df['temp'] = temp
+    # get trend line
+    xi = np.arange(len(df))
     y = temp.values
     slope, intercept = np.polyfit(xi, y, 1)
-    dy = y - intercept - slope * xi
-    dtemp = pd.Series(index=temp.index, data=dy, dtype=np.float64)
-    sigma = dtemp.std()
+    df['trend'] = slope * xi + intercept
+    df['detrend'] = (df.temp - df.trend)
+    vol = calc_volcano((end.year, end.month))
+    # apply ocean warming curve to volcanic forcing
+    df['vol'] = convolve_impulse(vol, monthly=True)
+    enso = dst.enso(annual=False).loc[start:end]
+    df[enso.columns] = enso
+    df['pdo'] = dst.pdo(annual=False).loc[start:end]
+    solar = dst.solar(annual=False).loc[start:end] 
+    solar -= solar.mean()
+    df['solar'] = convolve_impulse(solar.Data, monthly=True)
+    df['linear'] = np.arange(len(df))  # any residual linear trend
+    df.fillna(0, inplace=True)
+    return df
+
+def fit_vars(df=None):
+    if df is None:
+        df = compile_vars()
+    sigma = df.detrend.std()
+    print(f'Original standard deviation was: {sigma:.4f}°C')
+    cols = df.columns[3:]
+    A = np.vstack([df[cols].to_numpy().T,
+                   np.ones(len(df))]).T
+    c = np.linalg.lstsq(A, df.detrend.values, rcond=None)[0]
+    df['vars'] = A @ c  # matrix multiply
+    df[cols] *= c[:-1]  # this does not include the constant offset c[-1]
+    df['linear'] += c[-1]
+    df['reduced'] = df.detrend - df.vars
+    df['real'] = df.trend + df.linear
+    nsigma = df.reduced.std()
+    print(f'New standard deviation is: {nsigma:.4f}°C')
+    print(f'Change in slope is {(c[-2]*120):.3f}°C/decade')
+    return df
+
+# %% Plotting helpers
+
+
+def new_axes(name, title, ylabel):
+    fig, ax = plt.subplots(1, 1, num=name, clear=True)
+    tls.byline(ax)
+    tls.titles(ax, title, ylabel)
+    return ax
+
+def new_fig_rows(name, title, ylabel, num=1):
+    fig, axs = plt.subplots(num, 1, num=name, clear=True, sharex=True)
+    fig.subplots_adjust(hspace=0)
+    tls.byline(axs[-1])
+    tls.titles(axs[0], title, ylabel)
+    return axs
+
+def plot_one(ax, data, sigma, years=None, labels=None):
+    """ Plot one axes given a Pandas Series as data
+    """
+    if labels:
+        years = None
+    ax.plot(data.index, data.values, 'k+', alpha=.3)
+    ax.axhline(color='k', lw=.5)
+    for i in [1, 2]:
+        ax.fill_between(data.index, i*sigma, -i*sigma, color='b', alpha=.12)
+    labels = label_years(ax, data, sigma, years, labels=labels)
+    return labels
     
+def max_years(data, years=None):
+    if not years:
+        years = [1990, 1998, 2016, 2022]
+    labels = []
+    for yr in years:
+        start = dt.datetime(yr-2,1,1)
+        end = dt.datetime(yr+2,1,1)
+        date_range = data.loc[start:end]
+        labels.append(date_range.idxmax())
+    return labels
+        
+def label_years(ax, data, sigma, years=None, labels=None):
+    """ Label the warmest month in a range centred around the supplied
+        years. 
+        
+        data: Pandas series
+        sigma: float
+        years: list of ints, years to search for max temperatures
+        labels: list of Timestamp values to use with data.loc[], or None
+        
+        returns: labels
+    """
+    if not labels:
+        labels = max_years(data, years)
+    for x in labels:
+        y = data.loc[x]
+        ys = y/sigma
+        t = f"{x:%b %y}\n{ys:.1f}σ"
+        ax.text(x, y, t, ha='center', 
+                va='bottom', size='small')
+    return labels
+    
+# %% Plotting Functions
 
 def plotTempTrend(index=None):
     """ Plot the monthly temperature trend to 2070
@@ -293,173 +383,50 @@ def plotTempTrend(index=None):
     plt.show()
     return
 
-
-def plotTempVar():
+def plotTempVar(source='hadcrut'):
     """ Plots variability of global temperature with and without
-        ENSO removed.
+        external variation (ENSO, volcanic sulphates, PDO, and solar) removed.
     """
-    def new_axes(name, title, ylabel):
-        fig = plt.figure(name)
-        fig.clear()  
-        ax = fig.add_subplot(111)  
-        tls.byline(ax)
-        tls.titles(ax, title, ylabel)
-        return ax
-    
-    def plotOne(ax, data, sigma, years=None, labels=None):
-        """ Plot one axes given a Pandas Series as data
-        """
-        if labels:
-            years = None
-        ax.plot(data.index, data.values, 'k+', alpha=.3)
-        ax.axhline(color='k', lw=.5)
-        for i in [1, 2]:
-            ax.fill_between(data.index, i*sigma, -i*sigma, color='b', alpha=.12)
-        labels = labelYears(ax, data, sigma, years, labels=labels)
-        return labels
-    
-    def max_years(data, years=None):
-        if not years:
-            years = [1990, 1998, 2016, 2022]
-        labels = []
-        for yr in years:
-            start = dt.datetime(yr-2,1,1)
-            end = dt.datetime(yr+2,1,1)
-            date_range = data.loc[start:end]
-            labels.append(date_range.idxmax())
-        return labels
-            
-    def labelYears(ax, data, sigma, years=None, labels=None):
-        """ Label the warmest month in a range centred around the supplied
-            years. 
-            
-            data: Pandas series
-            sigma: float
-            years: list of ints, years to search for max temperatures
-            labels: list of Timestamp values to use with data.loc[], or None
-            
-            returns: labels
-        """
-        if not labels:
-            labels = max_years(data, years)
-        for x in labels:
-            y = data.loc[x]
-            ys = y/sigma
-            t = f"{x:%b %y}\n{ys:.1f}σ"
-            ax.text(x, y, t, ha='center', 
-                    va='bottom', size='small')
-        return labels
-    
-    source = 'hadcrut'
-    index = 'N34'
-    df = ds.load_modern(source, annual=False)
-    spec = df.spec  # specs that were added by DataStore module
-    enso = dst.enso()
-    mei = ds.load_modern('mei', annual=False)
-    mei = mei.loc[enso.index[0]:]
-    enso['_MEI'] = mei
-    enso = enso[index]
-    start = enso.index[0]
-    data = df.loc[df.index>=start, 'Data']
-    xi = np.arange(len(data))  # Index
-    slope, intercept = np.polyfit(xi, data.values, 1)
-    data -= slope * xi + intercept  # detrend data
-    sigma = data.std()
-    labels = max_years(data)
+    df = compile_vars(source)
+    df = fit_vars(df)
+    labels = max_years(df.detrend)
     
     # Plot temperature and Nino Index
-    ax = new_axes('Deviation',
-                  "Temperature Deviation from Trend",
-                  f"{spec.name} Monthly Global Temperature (ºC)")
-    plotOne(ax, data, sigma)
-    # plot Nino index over top
-    scale = data.max()/enso.max()
-    y = enso.values * scale
-    ax.plot(enso.index, y, 'r-', lw=.75)
-    ax.text(enso.index[-1], y[-1], f"Niño {index[1:]} Index\n  x {scale:.3f}",
+    axs = new_fig_rows('Deviation',
+                       "Temperature Deviation from Trend",
+                       f"{source.capitalize()} Monthly Global Temperature (ºC)",
+                  num=2)
+    sigma = df.detrend.std()
+    ax = axs[0]
+    plot_one(ax, df.detrend, sigma, labels=labels)
+    # plot natural influences over top
+    ax.plot(df.index, df.vars.values, 'r-', lw=1)
+    ax.text(df.index[-1], df.vars[-1], " Natural\n Influences",
+            color='r', size='small', va='center', weight='bold')
+    y1 = df.trend[0]
+    y2 = df.trend[-1]
+    dx = len(df) / 120
+    slope = (y2 - y1)/dx
+    ax.text(df.index[-1], -.01, f' Trend:\n {slope:.4f}°C/decade',
+            size='small', va='top')
+    ylim = ax.get_ylim()
+    text = 'Natural influences are NINO Indexes, Volcanic sulphates, Solar, and PDO'
+    ax.text(.99, 0.01, text, ha='right', transform=ax.transAxes,
             color='r', size='small')
-    
-    # Same plot with temperature averaged over 3 months
-    adata = data.rolling(window=3, min_periods=1, center=True,
-                         closed='both').mean()
-    alabels = max_years(adata)
-    ax = new_axes('Averaged',
-                  "Averaged, Detrended Temperature",
-                  f"{spec.name} Monthly Global Temperature (ºC) (3-month average)")
-    asigma = adata.std()
-    plotOne(ax, adata, asigma, labels=alabels)
-    scale = adata.max()/enso.max()
-    y = enso.values * scale
-    ax.plot(enso.index, y, 'r-', lw=.75)
-    ax.text(enso.index[-1], y[-1], f"Niño {index[1:]} Index\n  x {scale:.3f}",
-            color='r', size='small')
-    
-    # Plot with N3 removed from temperature
-    ax = new_axes('Less_ENSO',
-                  "Temperature Deviation from Trend with Niño Index 3 Removed",
-                  f"{spec.name} Monthly Global Temperature (ºC)")
-    edata = data - enso * scale
-    plotOne(ax, edata, sigma, labels=labels)
-    
-    # Plot with 3-month rolling average applied to temperature
-    ax = new_axes('Averaged_Less_ENSO',
-                  f"Averaged, Detrended Temperature with Niño {index[1:]} Index Removed",
-                  f"{spec.name} Monthly Global Temperature (ºC) (3-month average)")
-    scale = adata.max()/enso.max() * .8
-    print(f"scale: {scale}")
-    edata = adata - enso * scale
-    plotOne(ax, edata, asigma, labels=alabels)
-    
+    ax = axs[1]
+    nsigma = df.reduced.std()
+    plot_one(ax, df.reduced, nsigma, labels=labels)
+    ax.set_ylim(ylim)
+    ax.text(df.index[0], 2.1*nsigma, "Natural Influences Removed",
+            color='k', weight='bold')
+    y1 = df.real[0]
+    y2 = df.real[-1]
+    slope = (y2 - y1)/dx
+    ax.text(df.index[-1], -.01, f' Trend:\n {slope:.4f}°C/decade',
+            size='small', va='top')
+   
     plt.show()
     return
 
-plotTempVar()
 
-def test_enso():
-    """ Find the ENSO index that best reduces the temperature variation.
-    """
-    
-    def compare(data, test):
-        """ Compare ENSO with supplied data and test function
-        """
-        enso = dst.enso()
-        enso = enso.loc[data.index]  # use comparable data points
-        bar = test(data.values)  # the bar to get under
-        min_bar = bar
-        min_index = ''
-        for c in enso.columns:
-            # Set up matrix for least squares fit equation
-            ei = enso[c].values
-            #ei *= np.abs(ei)**.1  # trying different powers
-            A = np.vstack([ei, np.ones(n)]).T
-            # Get best fit
-            rc = np.linalg.lstsq(A, data.values, rcond=None)[0]
-            ry = data.values - rc[0] * ei
-            result = test(ry)
-            print(f"{c}: {rc[0]:.5f} - {result:.5f}, {result/bar*100:.1f}%")
-            if result < min_bar:
-                min_bar = result
-                min_index = c
-        return min_index
-    
-    source = 'hadcrut'
-    enso = dst.enso()
-    temp = ds.load_modern(source, annual=False)
-    temp = temp.loc[temp.index>=enso.index[0], 'Data']  # The index starts after temp data
-    
-    # Remove the temperature trend
-    n = len(temp)
-    ix = np.arange(n)
-    slope, intercept = np.polyfit(ix, temp.values, 1)
-    temp.values -= (slope * ix + intercept)
-
-    # Test by reducing the std dev
-    print("\nReducing Std Dev\n")   
-    compare(temp, np.std)
-    
-    #  apply 3-month moving average
-    temp = temp.rolling(window=3, min_periods=1, center=True,
-                                  closed='both').mean()
-    print("\nReducing with 3-month average\n")
-    compare(temp, np.std)
     

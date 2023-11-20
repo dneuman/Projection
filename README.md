@@ -2,7 +2,7 @@
  Estimate of a "Business as Usual" Climate Projection
  
 ## Introduction  
-This model uses recent trends in emissions to estimate future impact on climate. It first estimates climate sensitivity from past atmospheric greenhouse gas (GHG) concentrations and other climate forcings, using a simplified ocean warming model. It then estimates CO~2~ sinks based on past emissions using the same ocean warming model. Finally, it applies a series of assumptions on future emissions based on current market trends.
+This model uses recent trends in emissions to estimate future impact on climate. It first estimates climate sensitivity from past atmospheric greenhouse gas (GHG) concentrations and other climate forcings, using a simplified ocean warming model. It then estimates CO~2 sinks based on past emissions using the same ocean warming model. Finally, it applies a series of assumptions on future emissions based on current market trends.
 
 ## Assumptions    
 - **Renewable Energy** will be estimated by a logistic curve fitted to existing growth to reach 100% of market. This will have significant uncertainty.  
@@ -19,5 +19,3 @@ This model uses recent trends in emissions to estimate future impact on climate.
 
 ## Data  
 Data will be downloaded from the source where possible. The `specs.yaml` file contains details of where each file is from, and how that file was imported.
-
-

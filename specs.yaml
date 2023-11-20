@@ -124,22 +124,26 @@ pdo:
     index_col: 0
   table: True
   save_as: 'pdo.txt'
-
+  
 solar:
-  name: 'Solar Activity: SATIRE-T and -S'
-  doi: https://doi.org/10.17617/1.5U
-  info: http://www2.mps.mpg.de/projects/sun-climate/data.html
-  url: http://www2.mps.mpg.de/projects/sun-climate/data/SATIRE-T_SATIRE-S_TSI_1850_20230708.txt
+  name: 'Solar Total Surface Irradiance'
+  url: 'https://www.sidc.be/users/stevend/ROB_TSI_composite_latest.txt'
+  cite: 
+    S. Dewitte, J. Cornelis and M. Meftah. Centennial Total Solar Irradiance
+    Variation. Remote Sens. 2022, 14, 1072.
+    S. Dewitte and S. Nevens, "The Total Solar Irradiance Climate Data Record",
+    2016 ApJ 830 25
+  doi: https://doi.org/10.3390/rs14051072
   format:
     sep: '\s+'
-    comment: ';'
+    comment: '#'
     header: 0
-    index_col: 0
-    skiprows: 1
-    names: ['Date', 'Data']
+    usecols: [1, 2]
+    index_col: 1
+    names: ['Year', 'Data', 'Date']
   origin: 'julian'
   save_as: 'solar.txt'
-
+    
 # Historic data
 
 co2composite:
@@ -150,7 +154,7 @@ co2composite:
     Thomas F. Stocker, Hubertus Fischer, Sepp Kipfstuhl and Jerome Chappellaz.
     2015. Revision of the EPICA Dome C CO2 record from 800 to 600 kyr before
     present. Geophysical Research Letters.
-  doi: 10.1002/2014GL061957
+  doi: 'http://doi.org/10.1002/2014GL061957'
   save_as: 'co2composite.txt'
 
 co2ml:
@@ -173,7 +177,7 @@ sulfates:
     Hausfather, Z., Way, R. G., White, B., Subramanian, A., & Schurer, A. P.
     (2019). A Limited Role for Unforced Internal Variability in
     Twentieth-Century Warming, Journal of Climate, 32(16), 4893-4917.
-  doi: https://doi.org/10.1175/JCLI-D-18-0555.1
+  doi: 'https://doi.org/10.1175/JCLI-D-18-0555.1'
   save_as: 'sulfates.txt'
 
 satire:
@@ -185,7 +189,7 @@ satire:
     va: ['top', 'top', 'bottom', 'top', 'bottom', 'top', ]
     Year: [1840, 1690, 1470, 1290, 1190, 1040]
     Data: [-0.25, -0.4, -0.15, -0.35, 0.15, -0.3]
-  doi: https://doi.org/10.17617/1.5U
+  doi: 'https://doi.org/10.17617/1.5U'
   save_as: 'satire.txt'
 
 volcano_forcing:

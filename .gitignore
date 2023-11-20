@@ -112,6 +112,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Project specific
 .DS_Store
 Data/.DS_Store
-Data/GloSSAC_V2.21.nc
+Data/*.nc

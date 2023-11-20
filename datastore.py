@@ -97,6 +97,9 @@ def update_modern(f: str):
     if table:
         # Turn a table with month columns to a long list
         df[yn] = df.index
+        # force column names to numbers
+        new_names = dict(zip(df.columns, list(range(1, 13))))
+        df.rename(columns=new_names, inplace=True)
         df = df.melt(id_vars=[yn], value_name=dn, var_name='Month')
         df['Day'] = 1
         df.index = pd.to_datetime(df[['Year', 'Month', 'Day']])
@@ -109,12 +112,13 @@ def update_modern(f: str):
               float_format='%.4f', date_format='%Y-%m-%d')
     df.label = name
     return df
-
+  
 def load_modern(f: str, annual=True):
     """ Return files that have been processed as
         tab-delimited files
 
         f: str, name of data set
+        annual: bool, return annual data, default True
     """
     spec = make_spec(dst.specs[f])
     fname = spec.save_as
@@ -124,16 +128,23 @@ def load_modern(f: str, annual=True):
         # normalize to Hadcrut data for 1961-90
         df[dn] -= df.loc[(df.index.year>=1961)&(df.index.year<=1990), dn].mean()
         df[dn] += dst.specs['pie_offset']  # pre-industrial era
-    if annual and hasattr(df.index, 'month'):
-        counts = df[dn].groupby(df.index.year).count()
-        low_yrs = counts.loc[counts < 12].index.values
-        if len(low_yrs) < 3:
-            # if there are more than 2 low_counts, it means that
-            # only annual data is given.
-            for y in low_yrs:
-                i = df.loc[df.index.year==y].index
-                df.drop(index=i, inplace=True)
-            df = df.groupby(df.index.year).mean()
+    if hasattr(df.index, 'month'):
+        counts = df[df.columns[0]].groupby(df.index.year).count()
+        if annual:
+            low_yrs = counts.loc[counts < 12].index.values
+            if len(low_yrs) < 3:
+                # if there are more than 2 low_counts, it means that
+                # only annual data is given.
+                for y in low_yrs:
+                    i = df.loc[df.index.year==y].index
+                    df.drop(index=i, inplace=True)
+                df = df.groupby(df.index.year).mean()
+        else: # return monthly data
+            high_yrs = counts.loc[counts > 24].index.values
+            if len(high_yrs) > 2 : # it is daily data
+                df['m'] = df.index.strftime('%Y-%m-01')
+                df = df.groupby('m').mean()
+                df.index = pd.to_datetime(df.index)
     df.spec = ''  # prevent error message about creating columns this way
     df.spec = spec
     return df
