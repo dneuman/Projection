@@ -19,3 +19,11 @@ This model uses recent trends in emissions to estimate future impact on climate.
 
 ## Data  
 Data will be downloaded from the source where possible. The `specs.yaml` file contains details of where each file is from, and how that file was imported.
+
+## Modules  
+- **projection.py:** This is the main module. Most work will be here.  
+- **datastore.py:** This module downloads, processes, and caches data used in other
+programs. The caching is most useful to speed up interactive sessions. It uses the 
+`specs.yaml` file for information about each data source.  
+- **tools.py:** Miscellaneous routines are kept here. Not all are used by `projection.py`
+
