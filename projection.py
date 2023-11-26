@@ -234,7 +234,9 @@ def fit_vars(df=None):
     nsigma = df.reduced.std()
     print(f'New standard deviation is: {nsigma:.4f}°C')
     print(f'Change in slope is {(c[-2]*120):.3f}°C/decade')
-    return df
+    r2 = tls.R2(df.detrend.values, df.reduced.values)
+    print(f'R2 value is {r2*100:.2f}')
+    return df    
 
 # %% Plotting helpers
 
@@ -428,5 +430,94 @@ def plotTempVar(source='hadcrut'):
     plt.show()
     return
 
+def plotInfluences(df=None):
+    """
+    Show how the fitted natural influences compare
 
+    Parameters
+    ----------
+    df : pd.DataFrame, optional
+        Dataframe of natural variances. The default is None.
+
+    Returns
+    -------
+    None.
+
+    """
+    if df is None:
+        df = fit_vars()
+    e_cols = 'N12 N3 N4 N34'.split()
+    cols = 'enso vol solar pdo'.split()
+    name = 'All ENSO Volcanic Solar PDO'.split()
+    df['enso'] = df[e_cols].sum(axis='columns')
+    # plot major influences
+    axs = new_fig_rows('Influences', 
+                       'Natural Influences', 
+                       'Temperature Effect °C', num=len(cols)+1)
+    axs[0].figure.set_size_inches(9,9)
+    for c, i in zip(['vars']+cols, range(len(cols)+1)):
+        axs[i].plot(df[c])
+        axs[i].set_ylim((-.25, .25))
+        axs[i].text(df.index[0], -.1, name[i], weight='bold')
+    # Break down the ENSO index
+    axs = new_fig_rows('ENSO',
+                       'ENSO Components',
+                       'Temperature Effect °C', num=len(e_cols)+1)
+    axs[0].figure.set_size_inches(9,9)
+    names = ['Combined'] + e_cols
+    for c, i in zip(['enso']+e_cols, range(len(cols)+1)):
+        axs[i].plot(df[c])
+        axs[i].set_ylim((-.25, .25))
+        axs[i].text(df.index[0], -.1, names[i], weight='bold')
+
+    plt.show()
+    
+def plotHist(df=None, num=3):
+    """ Plot histograms of detrended temperature and with natural influences
+        removed.
+        
+        num: number of bins per standard deviation
+    """
+    def normal(x, mu, sigma):
+        y = 1/(sigma * np.sqrt(2 * np.pi)) \
+            * np.exp( - (x - mu)**2 / (2 * sigma**2))
+        return y
+    
+    if df is None:
+        df = fit_vars()
+    cols = ['detrend', 'reduced']
+    titles = {cols[0]:'Global Temperature',
+              cols[1]:'Natural Influences Removed'}
+    fig, axs = plt.subplot_mosaic([cols], num='hist', clear=True, 
+                                  sharey=True, layout='tight')
+    fig.suptitle('Histograms of Monthly Temperatures',
+                 ha='left', x=0.1)
+    fig.supxlabel('Deviation from Trend (°C)')
+    axs[cols[0]].set_ylabel('Number of Months')
+    fig.subplots_adjust(wspace=0.02)
+    size = {}
+    std = {}
+    bcols = {}
+    pdf = pd.DataFrame(index=np.arange(-4*num, 4*num+1))
+    d = df[cols].copy()
+    for c in cols:
+        axs[c].set_title(titles[c], loc='left')
+        std[c] = d[c].std()
+        size[c] = std[c] / num  # bin sizes are relative to std dev
+        bcols[c] = 'bins_' + c
+        pcols = [c, bcols[c]]
+        d[bcols[c]] = d[c] // size[c]  # put each data point in a bin
+        pdf[c] = d[pcols].groupby(bcols[c]).count()
+        edges = np.arange(pdf.index[0], pdf.index[-1]+2) * size[c]
+        axs[c].stairs(pdf[c].values, edges, fill=True)
+        x = edges[:-1]+size[c]/2
+        axs[c].plot(x, size[c]*len(d)*normal(x, 0, std[c]),
+                lw=2)
+        if c == cols[0]:
+            xlim = axs[c].get_xlim()
+        else:
+            axs[c].set_xlim(xlim)
+    plt.show()
+        
+    
     
