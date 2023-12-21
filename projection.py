@@ -217,9 +217,9 @@ def compile_vars(source='hadcrut'):
     df.fillna(0, inplace=True)
     return df
 
-def fit_vars(df=None):
+def fit_vars(source='hadcrut', df=None):
     if df is None:
-        df = compile_vars()
+        df = compile_vars(source)
     sigma = df.detrend.std()
     print(f'Original standard deviation was: {sigma:.4f}°C')
     cols = df.columns[3:]
@@ -235,7 +235,7 @@ def fit_vars(df=None):
     print(f'New standard deviation is: {nsigma:.4f}°C')
     print(f'Change in slope is {(c[-2]*120):.3f}°C/decade')
     r2 = tls.R2(df.detrend.values, df.reduced.values)
-    print(f'R2 value is {r2*100:.2f}')
+    print(f'R² value is {r2*100:.2f}')
     return df    
 
 # %% Plotting helpers
@@ -300,7 +300,7 @@ def label_years(ax, data, sigma, years=None, labels=None):
     
 # %% Plotting Functions
 
-def plotTempTrend(index=None):
+def plotTempTrend(source='hadcrut'):
     """ Plot the monthly temperature trend to 2070
     
         index: string, if provided, remove ENSO signal. Possible values
@@ -310,9 +310,9 @@ def plotTempTrend(index=None):
         xpi = int((y - intercept) / slope)
         return xp[xpi]
         
-   # Do analysis
+    # Do analysis
+    df = fit_vars(source)
     
-    source = 'hadcrut'
     df = ds.load_modern(source, annual=False)
     spec = df.spec  # specs that were added by DataStore module
     start = '1980-01-01'
@@ -519,5 +519,58 @@ def plotHist(df=None, num=3):
             axs[c].set_xlim(xlim)
     plt.show()
         
+def plotOceanWarming():
+    """ Plot ocean warming curve demonstration
+    """
+    df = pd.DataFrame(index=np.arange(200))
+    cols = ['Warming', 'Cooling', 'Vol']
+    wn, cn, vn = cols
+    rn = ' Result'
+    df[wn] = 0.
+    # Add a heating step function
+    df.loc[df.index > 25, wn] = 1.
+    # Apply the ocean warming result
+    # convolve_impulse converts annual values to a sum of steps
+    df[wn+rn] = convolve_impulse(df[wn])
+    # Add a cooling step function
+    df[cn] = df[wn]
+    df.loc[df.index > 75, cn] = -1.
+    df.loc[df.index > 125, cn] = 0.
+    df[cn+rn] = convolve_impulse(df[cn])
+    # 
+    vol = calc_volcano()
+    # normalize
+    vol /= -vol.max()
+    start = 124
+    df[vn] = vol.iloc[start:(start+200)].values
+    #df[vn] = vol.loc[vol.index.year > 1988].head(200).values
+    df[vn+rn] = convolve_impulse(df[vn], monthly=True)
+    # Plot curves
+    fig, axs = plt.subplots(3, sharex=True, num='Warming', 
+                            clear=True)
+    fig.suptitle('Illustration of Ocean Warming',
+                 ha='left', x=0.1)
+    axs[-1].set_xlabel('Years (Months for Eruption)')
+    titles = ['A) Ocean Warming Curve',
+              'B) Ocean Warming and Cooling',
+              'C) Cooling from 1991 Mount Pinatubo Eruption (months)']
+    for ax, col, title in zip(axs, cols, titles):
+        ax.plot(df[col])
+        ax.plot(df[col+rn])
+        ax.set_title(title, loc='left', weight='bold')
+    adj = 0.02  # text positioning adjustment
+    axs[0].text(100, df[wn][100]-adj, 'Temperature Influence', 
+                color='C0', va='top')  
+    axs[0].text(100, df[wn+rn][100]-adj, 'Resulting Temperature',
+                color='C1', va='top')
+    
+    axs[0].annotate(f'{df[wn+rn][50]*100:.0f}% warming\nafter 25 years',
+                    (50, df[wn+rn][50]), xytext=(20, -20), 
+                    textcoords='offset points', va='top',
+                    arrowprops=dict(width=2, headwidth=7, headlength=5))
+    plt.show()
+
+plotOceanWarming()
+    
     
     
