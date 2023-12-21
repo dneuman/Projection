@@ -198,6 +198,8 @@ def compile_vars(source='hadcrut'):
     temp = temp.loc[start:end, 'Data']
     df = pd.DataFrame(index=temp.index)
     df['temp'] = temp
+    df.spec = ''  # prevent warning about adding columns this way
+    df.spec = temp.spec  # add file specifications
     # get trend line
     xi = np.arange(len(df))
     y = temp.values
@@ -312,49 +314,55 @@ def plotTempTrend(source='hadcrut'):
         
     # Do analysis
     df = fit_vars(source)
-    
-    df = ds.load_modern(source, annual=False)
-    spec = df.spec  # specs that were added by DataStore module
-    start = '1980-01-01'
+    start = df.index[0]
     end = '2070-01-01'
-    df = df.loc[df.index>=start]
     x = df.index.values
-    xi = np.arange(len(x))  # Index
     xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     xpi = np.arange(len(xp))  # projection index
-    y = df.Data.values
     
-    if index:
-        # remove ENSO signal
-        slope, intercept = np.polyfit(xi, y, 1)  # get LSF trend
-        dy = y - (slope * xi + intercept)  # detrend the data
-        enso = dst.enso()[index]
-        i = len(x) - len(enso)  # Align start dates, ENSO data starts later
-        x = x[i:]
-        xi = xi[i:]
-        dy = dy[i:]
-        scale = dy.max()/enso.max()
-        dy -= enso.values * scale
-        y = dy + slope * xi + intercept
-        enso_text = f'(NINO{index[1:]} signal removed)'
+    def plot(y, ys, ysp, dy, reduced=False):
+        figname = 'Projection'
+        if reduced:
+            figname += '_Reduced'
+            
+        sigma = dy.std()
+        sigma = dy.std()
     
-    slope, intercept = np.polyfit(xi, y, 1)  # get LSF trend
-    ys = slope * xi + intercept
+        dates = {1.5:get_date(1.5), 
+                 2.0:get_date(2.0)}
+    
+        fig = plt.figure(figname)
+        fig.clear()  # May have been used before
+        ax = fig.add_subplot(111)
+        ax.plot(x, y, 'k+', alpha=0.3)     # data
+        ax.plot(xp, ysp, 'b-', lw=1) # trend
+        ax.fill_between(xp, ysp+2*sigma, ysp-2*sigma, color='b', alpha=.12)
+        ax.fill_between(xp, ysp+sigma, ysp-sigma, color='b', alpha=.12)
+        for k in dates.keys():
+            ax.hlines(k, xmin, dates[k], color='k', lw=0.5, ls=':')
+            ax.vlines(dates[k], ymin, k, color='k', lw=0.5, ls=':')
+            ax.text(dates[k], k, dates[k].year, ha='left', va='top', weight='bold')
+
+        ax.text(xp[-1], ysp[-1]+sigma*2, '95% Range', va='center')
+        ax.text(xp[-1], ysp[-1]+sigma, '68% Range', va='center')
+        ax.text(xp[24], 2.2, "Note: This is a very simplistic projection based "+ \
+                "only on past trends", size='large')
+
+        tls.byline(ax)
+        tls.titles(ax, f"Temperature Projection to 2070 {enso_text}",
+                   f"{spec.name} monthly change from pre-industrial (°C)")
+        plt.show()
+        
+        return ax
+    
+    #=== Plot Observed Trend ===
+    y = df.temp.values
+    slope = (df.trend[-1] - df.trend[0]) / xpi[-1]
+    intercept = df.trend[0]
+    ys = df.trend.values
     ysp = slope * xpi + intercept
-    dy = y - ys  # detrend the data
-    sigma = dy.std()
+    dy = df.detrend.values
 
-    dates = {1.5:get_date(1.5), 
-             2.0:get_date(2.0)}
-
-    fig = plt.figure('Projection')
-    fig.clear()  # May have been used before
-    ax = fig.add_subplot(111)
-
-    ax.plot(x, y, 'k+', alpha=0.3)     # data
-    ax.plot(xp, ysp, 'b-', lw=1) # trend
-    ax.fill_between(xp, ysp+2*sigma, ysp-2*sigma, color='b', alpha=.12)
-    ax.fill_between(xp, ysp+sigma, ysp-sigma, color='b', alpha=.12)
     
     ymin = y.min()
     xmin = x[0]
@@ -369,20 +377,6 @@ def plotTempTrend(source='hadcrut'):
                 ha='right', va='center', size='small')  # last month
 
         
-    for k in dates.keys():
-        ax.hlines(k, xmin, dates[k], color='k', lw=0.5, ls=':')
-        ax.vlines(dates[k], ymin, k, color='k', lw=0.5, ls=':')
-        ax.text(dates[k], k, dates[k].year, ha='left', va='top', weight='bold')
-
-    ax.text(xp[-1], ysp[-1]+sigma*2, '95% Range', va='center')
-    ax.text(xp[-1], ysp[-1]+sigma, '68% Range', va='center')
-    ax.text(xp[24], 2.2, "Note: This is a very simplistic projection based "+ \
-            "only on past trends", size='large')
-
-    tls.byline(ax)
-    tls.titles(ax, f"Temperature Projection to 2070 {enso_text}",
-               f"{spec.name} monthly change from pre-industrial (°C)")
-    plt.show()
     return
 
 def plotTempVar(source='hadcrut'):
