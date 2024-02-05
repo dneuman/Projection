@@ -195,14 +195,13 @@ def compile_vars(source='hadcrut'):
     temp = ds.load_modern(source, annual=False)    
     start = pd.to_datetime('1980-01-01')
     end = temp.index[-1]
-    temp = temp.loc[start:end, 'Data']
-    df = pd.DataFrame(index=temp.index)
-    df['temp'] = temp
+    df = pd.DataFrame()
+    df['temp'] = temp.loc[start:end, 'Data']
     df.spec = ''  # prevent warning about adding columns this way
     df.spec = temp.spec  # add file specifications
     # get trend line
     xi = np.arange(len(df))
-    y = temp.values
+    y = df.temp.values
     slope, intercept = np.polyfit(xi, y, 1)
     df['trend'] = slope * xi + intercept
     df['detrend'] = (df.temp - df.trend)
@@ -211,11 +210,11 @@ def compile_vars(source='hadcrut'):
     df['vol'] = convolve_impulse(vol, monthly=True)
     enso = dst.enso(annual=False).loc[start:end]
     df[enso.columns] = enso
-    df['pdo'] = dst.pdo(annual=False).loc[start:end]
+    # The Pacific Decadal Oscillation does not appear to have an effect
+    # df['pdo'] = dst.pdo(annual=False).loc[start:end]
     solar = dst.solar(annual=False).loc[start:end] 
     solar -= solar.mean()
     df['solar'] = convolve_impulse(solar.Data, monthly=True)
-    df['linear'] = np.arange(len(df))  # any residual linear trend
     df.fillna(0, inplace=True)
     return df
 
@@ -224,20 +223,22 @@ def fit_vars(source='hadcrut', df=None):
         df = compile_vars(source)
     sigma = df.detrend.std()
     print(f'Original standard deviation was: {sigma:.4f}°C')
+    df['linear'] = np.arange(len(df))  # true linear trend
     cols = df.columns[3:]
     A = np.vstack([df[cols].to_numpy().T,
                    np.ones(len(df))]).T
-    c = np.linalg.lstsq(A, df.detrend.values, rcond=None)[0]
-    df['vars'] = A @ c  # matrix multiply
+    # The last column of A is constant, for mx + b
+    c = np.linalg.lstsq(A, df.temp.values, rcond=None)[0]
     df[cols] *= c[:-1]  # this does not include the constant offset c[-1]
     df['linear'] += c[-1]
-    df['reduced'] = df.detrend - df.vars
-    df['real'] = df.trend + df.linear
+    df['vars'] = df[cols[:-1]].sum(axis=1)  # all variables except trend
+    print(f"The constant offset of natural influences is {c[-1]:.4f}°C")
+    df['reduced'] = df.temp - df.linear - df.vars
     nsigma = df.reduced.std()
     print(f'New standard deviation is: {nsigma:.4f}°C')
-    print(f'Change in slope is {(c[-2]*120):.3f}°C/decade')
-    r2 = tls.R2(df.detrend.values, df.reduced.values)
-    print(f'R² value is {r2*100:.2f}')
+    print(f'New slope is {(c[-2]*120):.3f}°C/decade')
+    r2 = tls.R2(df.temp.values, (df.vars + df.linear).values)
+    print(f'R² value is {r2:.3f}')
     return df    
 
 # %% Plotting helpers
@@ -304,79 +305,94 @@ def label_years(ax, data, sigma, years=None, labels=None):
 
 def plotTempTrend(source='hadcrut'):
     """ Plot the monthly temperature trend to 2070
-    
-        index: string, if provided, remove ENSO signal. Possible values
-               are: [N12, N3, N4, N34] corresponding to NINO index.
     """
     def get_date(y):
         xpi = int((y - intercept) / slope)
+        if xpi > len(xp):
+            return xp[-1]
         return xp[xpi]
         
     # Do analysis
     df = fit_vars(source)
+    # Important columns:
+        # temp: temperature
+        # trend: trend calculated from the temperature
+        # detrend: temperature - trend
+        # vars: natural variation fit to the detrend values
+        # reduced: temp - vars
+        # real: real trend from reduced values
+    
     start = df.index[0]
     end = '2070-01-01'
     x = df.index.values
     xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     xpi = np.arange(len(xp))  # projection index
     
-    def plot(y, ys, ysp, dy, reduced=False):
+    def plot(y, yt, ytp, reduced=False):
+        """ Plot values against trend and variance
+        
+            y: values
+            yt: trend
+            ytp: projected trend
+        """
         figname = 'Projection'
         if reduced:
             figname += '_Reduced'
             
-        sigma = dy.std()
-        sigma = dy.std()
+        sigma = (y - yt).std()
     
         dates = {1.5:get_date(1.5), 
                  2.0:get_date(2.0)}
+        ymin = y.min()
+        xmin = x[0]
+        slope = (yt[-1] - yt[0]) / len(yt)
     
-        fig = plt.figure(figname)
-        fig.clear()  # May have been used before
+        fig = plt.figure(figname, clear=True)
         ax = fig.add_subplot(111)
         ax.plot(x, y, 'k+', alpha=0.3)     # data
-        ax.plot(xp, ysp, 'b-', lw=1) # trend
-        ax.fill_between(xp, ysp+2*sigma, ysp-2*sigma, color='b', alpha=.12)
-        ax.fill_between(xp, ysp+sigma, ysp-sigma, color='b', alpha=.12)
+        ax.plot(xp, ytp, 'b-', lw=1) # trend
+        ax.fill_between(xp, ytp+2*sigma, ytp-2*sigma, color='b', alpha=.12)
+        ax.fill_between(xp, ytp+sigma, ytp-sigma, color='b', alpha=.12)
         for k in dates.keys():
             ax.hlines(k, xmin, dates[k], color='k', lw=0.5, ls=':')
             ax.vlines(dates[k], ymin, k, color='k', lw=0.5, ls=':')
             ax.text(dates[k], k, dates[k].year, ha='left', va='top', weight='bold')
 
-        ax.text(xp[-1], ysp[-1]+sigma*2, '95% Range', va='center')
-        ax.text(xp[-1], ysp[-1]+sigma, '68% Range', va='center')
+        ax.text(xp[-1], ytp[-1]+sigma*2, '95% Range', va='center')
+        ax.text(xp[-1], ytp[-1]+sigma, '68% Range', va='center')
         ax.text(xp[24], 2.2, "Note: This is a very simplistic projection based "+ \
                 "only on past trends", size='large')
-
+        ax.text(get_date(1.75), 1.75, f"{slope*120:.3f}°C/decade", va='top')
+        reduced_name = ''
+        if reduced:
+            reduced_name = ', Natural Influences Removed'
+        tls.titles(ax, f"Temperature Projection to 2070{reduced_name}",
+                   f"{df.spec.name} monthly change from pre-industrial (°C)")
         tls.byline(ax)
-        tls.titles(ax, f"Temperature Projection to 2070 {enso_text}",
-                   f"{spec.name} monthly change from pre-industrial (°C)")
         plt.show()
         
         return ax
-    
+ 
     #=== Plot Observed Trend ===
+
     y = df.temp.values
-    slope = (df.trend[-1] - df.trend[0]) / xpi[-1]
-    intercept = df.trend[0]
-    ys = df.trend.values
-    ysp = slope * xpi + intercept
-    dy = df.detrend.values
-
+    yt = df.trend.values
+    slope = (yt[-1] - yt[0]) / len(yt)
+    intercept = yt[0]
+    ytp = slope * xpi + intercept
+    ax = plot(y, yt, ytp)
     
-    ymin = y.min()
-    xmin = x[0]
     
-    enso_text = ''
-    if not index:
-        ax.text(x[-1], y[-1], f'  {df.index[-1]:%b %y}', 
-                ha='left', va='center', size='small')  # last month
-        lastx = df.loc[df.index.year<2020, 'Data'].idxmax()
-        lasty = df.loc[lastx, 'Data']
-        ax.text(lastx, lasty, f'{lastx:%b %y}  ', 
-                ha='right', va='center', size='small')  # last month
-
-        
+    #=== Plot Trend with natural influences removed
+    
+    y = df.reduced.values + df.real.values
+    yt = df.real.values
+    slope = (yt[-1] - yt[0]) / len(yt)
+    intercept = df.real[0]
+    ytp = slope * xpi + intercept
+    ax = plot(y, yt, ytp, reduced=True)
+    
+    plt.show()
     return
 
 def plotTempVar(source='hadcrut'):
@@ -563,8 +579,6 @@ def plotOceanWarming():
                     textcoords='offset points', va='top',
                     arrowprops=dict(width=2, headwidth=7, headlength=5))
     plt.show()
-
-plotOceanWarming()
     
     
     
