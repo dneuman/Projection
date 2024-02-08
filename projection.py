@@ -229,15 +229,18 @@ def fit_vars(source='hadcrut', df=None):
                    np.ones(len(df))]).T
     # The last column of A is constant, for mx + b
     c = np.linalg.lstsq(A, df.temp.values, rcond=None)[0]
+    offset = c[-1]
     df[cols] *= c[:-1]  # this does not include the constant offset c[-1]
-    df['linear'] += c[-1]
     df['vars'] = df[cols[:-1]].sum(axis=1)  # all variables except trend
-    print(f"The constant offset of natural influences is {c[-1]:.4f}°C")
+    vars_offset = df.vars.mean()
+    df['vars'] -= vars_offset
+    df['linear'] += (offset + vars_offset)  # mx + b
     df['reduced'] = df.temp - df.linear - df.vars
     nsigma = df.reduced.std()
     print(f'New standard deviation is: {nsigma:.4f}°C')
+    print(f'Reduction of {(sigma-nsigma)/sigma*100:.1f}%')
     print(f'New slope is {(c[-2]*120):.3f}°C/decade')
-    r2 = tls.R2(df.temp.values, (df.vars + df.linear).values)
+    r2 = tls.R2(df.detrend.values, df.vars.values)
     print(f'R² value is {r2:.3f}')
     return df    
 
@@ -320,7 +323,7 @@ def plotTempTrend(source='hadcrut'):
         # detrend: temperature - trend
         # vars: natural variation fit to the detrend values
         # reduced: temp - vars
-        # real: real trend from reduced values
+        # linear: real trend from reduced values
     
     start = df.index[0]
     end = '2070-01-01'
@@ -328,16 +331,14 @@ def plotTempTrend(source='hadcrut'):
     xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     xpi = np.arange(len(xp))  # projection index
     
-    def plot(y, yt, ytp, reduced=False):
+    def plot(y, yt, ytp, win_name='projection', title_app=''):
         """ Plot values against trend and variance
         
             y: values
             yt: trend
             ytp: projected trend
         """
-        figname = 'Projection'
-        if reduced:
-            figname += '_Reduced'
+        figname = win_name
             
         sigma = (y - yt).std()
     
@@ -360,13 +361,11 @@ def plotTempTrend(source='hadcrut'):
 
         ax.text(xp[-1], ytp[-1]+sigma*2, '95% Range', va='center')
         ax.text(xp[-1], ytp[-1]+sigma, '68% Range', va='center')
+        ax.text(xp[-1], ytp[-1], f'σ = {sigma:.3f}°C', va='center')
         ax.text(xp[24], 2.2, "Note: This is a very simplistic projection based "+ \
                 "only on past trends", size='large')
         ax.text(get_date(1.75), 1.75, f"{slope*120:.3f}°C/decade", va='top')
-        reduced_name = ''
-        if reduced:
-            reduced_name = ', Natural Influences Removed'
-        tls.titles(ax, f"Temperature Projection to 2070{reduced_name}",
+        tls.titles(ax, f"Temperature Projection to 2070{title_app}",
                    f"{df.spec.name} monthly change from pre-industrial (°C)")
         tls.byline(ax)
         plt.show()
@@ -382,15 +381,28 @@ def plotTempTrend(source='hadcrut'):
     ytp = slope * xpi + intercept
     ax = plot(y, yt, ytp)
     
+    #=== Plot trend compared with natural influences ===
     
-    #=== Plot Trend with natural influences removed
-    
-    y = df.reduced.values + df.real.values
-    yt = df.real.values
+    y = df.temp.values
+    yt = df.trend.values
     slope = (yt[-1] - yt[0]) / len(yt)
-    intercept = df.real[0]
+    intercept = yt[0]
     ytp = slope * xpi + intercept
-    ax = plot(y, yt, ytp, reduced=True)
+    ax = plot(y, yt, ytp, win_name='projection_compare',
+              title_app=', Comparing Natural Influences')
+    y = (df.vars + df.linear).values
+    ax.plot(df.index.values, y)
+    
+    #=== Plot Trend with natural influences removed ===
+    
+    y = df.reduced.values + df.linear.values
+    yt = df.linear.values
+    slope = (yt[-1] - yt[0]) / len(yt)
+    intercept = df.linear[0]
+    ytp = slope * xpi + intercept
+    ax = plot(y, yt, ytp, win_name='projection_reduced',
+              title_app=', Natural Influences Removed')
+    
     
     plt.show()
     return
