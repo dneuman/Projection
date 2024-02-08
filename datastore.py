@@ -62,7 +62,7 @@ def update_modern(f: str):
     table = spec.get('table', False)
     origin = spec.get('origin', None)  # used for julian dates
     if table:
-        spec['names'] = list(range(1, 13))
+        fmt['names'] = list(range(1, 13))
     if 'start_year' in spec.keys():
         # File has unwanted info at end of file that could mess
         # up the loading process. Just calculate the number of lines
@@ -70,13 +70,14 @@ def update_modern(f: str):
         start_year = spec['start_year']
         start_month = spec.get('start_month', 1)
         now = dt.date.today()
+        skip = fmt.get('skiprows', 0)
         if table:
-            lines = now.year - start_year + 1
+            lines = now.year - start_year + 1 - skip
         else:
             lines = (now.year - start_year - 1) * 12
             lines += 13 - start_month
-            lines += now.month - 2  # skipped lines not included
-        spec['nrows'] = lines
+            lines += now.month - skip  # skipped lines not included
+        fmt['nrows'] = lines
     response = requests.get(url, headers=headers)
     df = pd.read_csv(StringIO(response.text), **fmt)
     if 'nrows' in spec.keys():  # remove spurious lines
@@ -97,9 +98,6 @@ def update_modern(f: str):
     if table:
         # Turn a table with month columns to a long list
         df[yn] = df.index
-        # force column names to numbers
-        new_names = dict(zip(df.columns, list(range(1, 13))))
-        df.rename(columns=new_names, inplace=True)
         df = df.melt(id_vars=[yn], value_name=dn, var_name='Month')
         df['Day'] = 1
         df.index = pd.to_datetime(df[['Year', 'Month', 'Day']])
