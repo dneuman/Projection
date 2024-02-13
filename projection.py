@@ -210,7 +210,7 @@ def compile_vars(source='hadcrut'):
     df['vol'] = convolve_impulse(vol, monthly=True)
     enso = dst.enso(annual=False).loc[start:end]
     df[enso.columns] = enso
-    # The Pacific Decadal Oscillation does not appear to have an effect
+    # # The Pacific Decadal Oscillation does not appear to have an effect
     # df['pdo'] = dst.pdo(annual=False).loc[start:end]
     solar = dst.solar(annual=False).loc[start:end] 
     solar -= solar.mean()
@@ -362,8 +362,9 @@ def plotTempTrend(source='hadcrut'):
         ax.text(xp[-1], ytp[-1]+sigma*2, '95% Range', va='center')
         ax.text(xp[-1], ytp[-1]+sigma, '68% Range', va='center')
         ax.text(xp[-1], ytp[-1], f'σ = {sigma:.3f}°C', va='center')
-        ax.text(xp[24], 2.2, "Note: This is a very simplistic projection based "+ \
-                "only on past trends", size='large')
+        text = ("Note: This is a very simplistic projection based only on past trends\n"+
+                "Natural Influences are El Niño, volcanic activity, and solar.")
+        ax.text(xp[24], 2.2, text, size='large')
         ax.text(get_date(1.75), 1.75, f"{slope*120:.3f}°C/decade", va='top')
         tls.titles(ax, f"Temperature Projection to 2070{title_app}",
                    f"{df.spec.name} monthly change from pre-industrial (°C)")
@@ -372,14 +373,14 @@ def plotTempTrend(source='hadcrut'):
         
         return ax
  
-    #=== Plot Observed Trend ===
+    # #=== Plot Observed Trend ===
 
-    y = df.temp.values
-    yt = df.trend.values
-    slope = (yt[-1] - yt[0]) / len(yt)
-    intercept = yt[0]
-    ytp = slope * xpi + intercept
-    ax = plot(y, yt, ytp)
+    # y = df.temp.values
+    # yt = df.trend.values
+    # slope = (yt[-1] - yt[0]) / len(yt)
+    # intercept = yt[0]
+    # ytp = slope * xpi + intercept
+    # ax = plot(y, yt, ytp)
     
     #=== Plot trend compared with natural influences ===
     
@@ -398,18 +399,17 @@ def plotTempTrend(source='hadcrut'):
     y = df.reduced.values + df.linear.values
     yt = df.linear.values
     slope = (yt[-1] - yt[0]) / len(yt)
-    intercept = df.linear[0]
+    intercept = yt[0]
     ytp = slope * xpi + intercept
     ax = plot(y, yt, ytp, win_name='projection_reduced',
               title_app=', Natural Influences Removed')
-    
     
     plt.show()
     return
 
 def plotTempVar(source='hadcrut'):
     """ Plots variability of global temperature with and without
-        external variation (ENSO, volcanic sulphates, PDO, and solar) removed.
+        external variation (ENSO, volcanic sulphates, and solar) removed.
     """
     df = compile_vars(source)
     df = fit_vars(df)
