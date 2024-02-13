@@ -213,7 +213,11 @@ def compile_vars(source='hadcrut'):
     # # The Pacific Decadal Oscillation does not appear to have an effect
     # df['pdo'] = dst.pdo(annual=False).loc[start:end]
     solar = dst.solar(annual=False).loc[start:end] 
-    solar -= solar.mean()
+    # Remove any longterm trend. This will already be removed from temperature.
+    y = solar.values
+    slope, intercept = np.polyfit(xi, y, 1)
+    yt = slope * xi + intercept
+    solar.Data -= yt  # solar is a single-column dataframe
     df['solar'] = convolve_impulse(solar.Data, monthly=True)
     df.fillna(0, inplace=True)
     return df
