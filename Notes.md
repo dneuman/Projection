@@ -1,18 +1,24 @@
 # Experiment Notes
 
+## 2024-02-14
+
+* Made annual version of chart. Has much better R^2 value.
+
+* Solar has a long-term trend which should be in the projection. But since the
+trend is currently -ve, it actually moves the crossing points further out. But
+it might not be that, so will leave the more pessimistic values, which are still
+more optimistic that the simple projection.
+
+### Next:
+
+* Make plots postable (legend, etc)
+
 ## 2024-02-13
 
 * Combining the axes onto one figure created a very squished image, even when
 stretched vertically to fit the entire sceen. The headings and text would all
 need to be adjusted. In the end, it is easier to composite the two charts onto
 one image manually.
-
-* Data:  
-> Original standard deviation was: 0.1411°C  
-> New standard deviation is: 0.1133°C  
-> Reduction of 19.7%  
-> New slope is 0.191°C/decade  
-> R² value is 0.351  
 
 * Solar trend was removed from the fit data. Any trend would show up in the
 linear fit, so this prevents doubling and makes a better fit to detrended 

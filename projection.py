@@ -97,7 +97,7 @@ def date_index(start, end, freq='MS'):
     b = date_string(end)
     return pd.date_range(start=a, end=b, freq=freq)
 
-def calc_volcano(end=None):
+def calc_volcano(end=None, annual=False):
     """
     Retrieve aerosol data and turn it into a volcanic aerosol forcing time
     series. Use seasonal solar variability, and albedo at each latitude to
@@ -105,8 +105,10 @@ def calc_volcano(end=None):
 
     Parameters
     ----------
-    end : tuple(int, int), optional
-        End date if it is later than data. The default is None.
+    end : tuple(year:int, month:int), or int, optional
+        End date or year if it is earlier than data. The default is None.
+    annual : bool, default False
+        If True, return annual means.
 
     Returns
     -------
@@ -126,6 +128,10 @@ def calc_volcano(end=None):
     last = ((time_index[-1] // 100), (time_index[-1] % 100))
     if not end:
         end = last
+    elif hasattr(end, 'month'):
+        end = (end.year, end.month)
+    elif annual:
+        end = (end, 12)
     dates = date_index(start, end)
     
     # new dataframe with date index
@@ -184,16 +190,21 @@ def calc_volcano(end=None):
     vol_df[:] *= react[-77.5:77.5].values.T
     vol = vol_df.mean(axis=1)
     vol.fillna(0, inplace=True)
+    
+    if annual:
+        vol = vol.groupby(vol.index.year).mean()
     return vol
 
 # %% Data Processing
 
-def compile_vars(source='hadcrut'):
+def compile_vars(source='hadcrut', annual=False):
     """ Return DataFrame containing temperature, trend line, detrended 
         temperature, and environmental factors that might affect temperature.
     """
-    temp = ds.load_modern(source, annual=False)    
+    temp = ds.load_modern(source, annual=annual)    
     start = pd.to_datetime('1980-01-01')
+    if annual:
+        start = start.year
     end = temp.index[-1]
     df = pd.DataFrame()
     df['temp'] = temp.loc[start:end, 'Data']
@@ -205,14 +216,14 @@ def compile_vars(source='hadcrut'):
     slope, intercept = np.polyfit(xi, y, 1)
     df['trend'] = slope * xi + intercept
     df['detrend'] = (df.temp - df.trend)
-    vol = calc_volcano((end.year, end.month))
+    vol = calc_volcano(end, annual=annual)
     # apply ocean warming curve to volcanic forcing
-    df['vol'] = convolve_impulse(vol, monthly=True)
-    enso = dst.enso(annual=False).loc[start:end]
+    df['vol'] = convolve_impulse(vol, monthly=(not annual))
+    enso = dst.enso(annual=annual).loc[start:end]
     df[enso.columns] = enso
     # # The Pacific Decadal Oscillation does not appear to have an effect
     # df['pdo'] = dst.pdo(annual=False).loc[start:end]
-    solar = dst.solar(annual=False).loc[start:end] 
+    solar = dst.solar(annual=annual).loc[start:end] 
     # Remove any longterm trend. This will already be removed from temperature.
     y = solar.values
     slope, intercept = np.polyfit(xi, y, 1)
@@ -222,9 +233,9 @@ def compile_vars(source='hadcrut'):
     df.fillna(0, inplace=True)
     return df
 
-def fit_vars(source='hadcrut', df=None):
+def fit_vars(source='hadcrut', annual=False, df=None):
     if df is None:
-        df = compile_vars(source)
+        df = compile_vars(source, annual=annual)
     sigma = df.detrend.std()
     print(f'Original standard deviation was: {sigma:.4f}°C')
     df['linear'] = np.arange(len(df))  # true linear trend
@@ -243,7 +254,8 @@ def fit_vars(source='hadcrut', df=None):
     nsigma = df.reduced.std()
     print(f'New standard deviation is: {nsigma:.4f}°C')
     print(f'Reduction of {(sigma-nsigma)/sigma*100:.1f}%')
-    print(f'New slope is {(c[-2]*120):.3f}°C/decade')
+    rate = 10 * ((not annual) * 11 + 1)
+    print(f'New slope is {(c[-2]*rate):.3f}°C/decade')
     r2 = tls.R2(df.detrend.values, df.vars.values)
     print(f'R² value is {r2:.3f}')
     return df    
@@ -310,8 +322,8 @@ def label_years(ax, data, sigma, years=None, labels=None):
     
 # %% Plotting Functions
 
-def plotTempTrend(source='hadcrut'):
-    """ Plot the monthly temperature trend to 2070
+def plotTempTrend(source='hadcrut', annual=False):
+    """ Plot the monthly temperature trend to 2080
     """
     def get_date(y):
         xpi = int((y - intercept) / slope)
@@ -320,7 +332,7 @@ def plotTempTrend(source='hadcrut'):
         return xp[xpi]
         
     # Do analysis
-    df = fit_vars(source)
+    df = fit_vars(source, annual)
     # Important columns:
         # temp: temperature
         # trend: trend calculated from the temperature
@@ -330,9 +342,13 @@ def plotTempTrend(source='hadcrut'):
         # linear: real trend from reduced values
     
     start = df.index[0]
-    end = '2070-01-01'
+    if annual:
+        end = 2080
+        xp = np.arange(start, end+1)
+    else:
+        end = '2080-01-01'
+        xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     x = df.index.values
-    xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     xpi = np.arange(len(xp))  # projection index
     
     def plot(y, yt, ytp, win_name='projection', title_app=''):
@@ -348,34 +364,46 @@ def plotTempTrend(source='hadcrut'):
     
         dates = {1.5:get_date(1.5), 
                  2.0:get_date(2.0)}
-        ymin = y.min()
+        ymin = 0
         xmin = x[0]
         slope = (yt[-1] - yt[0]) / len(yt)
-    
+        lh = []  # legend handle
         fig = plt.figure(figname, clear=True)
         ax = fig.add_subplot(111)
-        ax.plot(x, y, 'k+', alpha=0.3)     # data
+        ax.set_ylim(ymin, 2.5)
+#TODO finish legend
+        lh = lh.append(ax.plot(x, y, 'k+', alpha=0.5, label='')) # data
         ax.plot(xp, ytp, 'b-', lw=1) # trend
         ax.fill_between(xp, ytp+2*sigma, ytp-2*sigma, color='b', alpha=.12)
         ax.fill_between(xp, ytp+sigma, ytp-sigma, color='b', alpha=.12)
         for k in dates.keys():
+            if annual:
+                year = dates[k]
+            else:
+                year = dates[k].year
             ax.hlines(k, xmin, dates[k], color='k', lw=0.5, ls=':')
             ax.vlines(dates[k], ymin, k, color='k', lw=0.5, ls=':')
-            ax.text(dates[k], k, dates[k].year, ha='left', va='top', weight='bold')
+            ax.text(dates[k], k, year, ha='right', va='bottom', weight='bold')
 
-        ax.text(xp[-1], ytp[-1]+sigma*2, '95% Range', va='center')
+        ax.text(xp[-1], ytp[-1]+sigma*2, '95% Range', va='bottom')
         ax.text(xp[-1], ytp[-1]+sigma, '68% Range', va='center')
-        ax.text(xp[-1], ytp[-1], f'σ = {sigma:.3f}°C', va='center')
+        ax.text(xp[-1], ytp[-1], f'σ = {sigma:.3f}°C', va='top')
         text = ("Note: This is a very simplistic projection based only on past trends\n"+
                 "Natural Influences are El Niño, volcanic activity, and solar.")
-        ax.text(xp[24], 2.2, text, size='large')
-        ax.text(get_date(1.75), 1.75, f"{slope*120:.3f}°C/decade", va='top')
-        tls.titles(ax, f"Temperature Projection to 2070{title_app}",
-                   f"{df.spec.name} monthly change from pre-industrial (°C)")
+        ax.text(1982, 2.2, text, size='large')
+        rate = 10 * ((not annual) * 11 + 1)  # 10 or 120
+        change = 'monthly'
+        if annual:
+            change = 'annual'
+        ax.text(get_date(1.75), 1.75, f"{slope*rate:.3f}°C/decade", va='top')
+        tls.titles(ax, f"Temperature Projection to 2080{title_app}",
+                   f"{df.spec.name} {change} change from pre-industrial (°C)")
         tls.byline(ax)
         plt.show()
         
         return ax
+    
+    handle = []  # 
  
     # #=== Plot Observed Trend ===
 
