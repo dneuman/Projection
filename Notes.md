@@ -1,5 +1,15 @@
 # Experiment Notes
 
+## 2024-02-15
+
+* The pre-industrial era (PIE) offset changed  
+    * from 0.3117  
+    * to 0.366609  
+  This is the the offset from 1850-1899 to 1961-1990 in Hadcrut5. Other termperature
+  sources are normalized with this value.
+  
+* The plots were finalized for posting.
+
 ## 2024-02-14
 
 * Made annual version of chart. Has much better R^2 value.

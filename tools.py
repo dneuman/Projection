@@ -39,7 +39,7 @@ def byline(ax: plt.axes, x=0.01, y=0.01,
     """
     d = dt.datetime.now()
     date = d.strftime('%d %b %Y')
-    text = 'Chart: mstdn.ca/@dan613 ©CC-BY 4.0' + '  ' + date
+    text = 'Chart: ottawa.place/@dan613 ©CC-BY 4.0' + '  ' + date
     if ha=='right' and x==0.01:
         x = 0.99
     if va=='top' and y==0.01:

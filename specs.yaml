@@ -2,14 +2,19 @@
 #   use header: 0 to rename headers on first (0-index) line
 #   don't include header: if there are no headers
 
-# File Info
+# == File Info ==
+# These lists determine how to process the raw data. 
 modern: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah', 'mei', 'enso',
         'pdo', 'solar']
 special: []
 temperature: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah']
-pie_offset: 0.3117 # temperature offset from pre-industrial era to 1961-1990
 
-# Modern Temperatures
+# temperature offset from pre-industrial era to 1961-1990 inclusive.
+# Pre-industrial is 1850-1899, and the offset is calculated using Hadcrut5
+pie_offset: 0.366609 
+
+
+# == Modern Temperatures ==
 best:
   name: 'Berkeley Earth'
   url: 'https://berkeley-earth-temperature.s3.us-west-1.amazonaws.com/Global/Land_and_Ocean_complete.txt'
@@ -86,7 +91,7 @@ uah:
   start_month: 12
   save_as: 'uah.txt'
   
-# Other modern data
+# == Other modern data ==
 
 enso: 
   name: 'El Nino Southern Oscillation Index'
@@ -144,7 +149,7 @@ solar:
   origin: 'julian'
   save_as: 'solar.txt'
     
-# Historic data
+# == Historic data ==
 
 co2composite:
   name: 'Bereiter, Eggleston, et al (2015), NCDC Study 17975'

@@ -350,6 +350,8 @@ def plotTempTrend(source='hadcrut', annual=False):
         xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     x = df.index.values
     xpi = np.arange(len(xp))  # projection index
+    period = {True: 'Annual', False: 'Monthly'}
+    alpha = {True: .5, False: .3}
     
     def plot(y, yt, ytp, win_name='projection', title_app=''):
         """ Plot values against trend and variance
@@ -367,12 +369,11 @@ def plotTempTrend(source='hadcrut', annual=False):
         ymin = 0
         xmin = x[0]
         slope = (yt[-1] - yt[0]) / len(yt)
-        lh = []  # legend handle
         fig = plt.figure(figname, clear=True)
         ax = fig.add_subplot(111)
-        ax.set_ylim(ymin, 2.5)
-#TODO finish legend
-        lh = lh.append(ax.plot(x, y, 'k+', alpha=0.5, label='')) # data
+        ax.set_ylim(ymin, 2.7)
+        ax.plot(x, y, 'k+', alpha=alpha[annual], 
+                label=f'{period[annual]} Temperature') # data
         ax.plot(xp, ytp, 'b-', lw=1) # trend
         ax.fill_between(xp, ytp+2*sigma, ytp-2*sigma, color='b', alpha=.12)
         ax.fill_between(xp, ytp+sigma, ytp-sigma, color='b', alpha=.12)
@@ -388,7 +389,7 @@ def plotTempTrend(source='hadcrut', annual=False):
         ax.text(xp[-1], ytp[-1]+sigma*2, '95% Range', va='bottom')
         ax.text(xp[-1], ytp[-1]+sigma, '68% Range', va='center')
         ax.text(xp[-1], ytp[-1], f'σ = {sigma:.3f}°C', va='top')
-        text = ("Note: This is a very simplistic projection based only on past trends\n"+
+        text = ("Note: This is a very simplistic projection based only on past trends.\n"+
                 "Natural Influences are El Niño, volcanic activity, and solar.")
         ax.text(1982, 2.2, text, size='large')
         rate = 10 * ((not annual) * 11 + 1)  # 10 or 120
@@ -402,18 +403,7 @@ def plotTempTrend(source='hadcrut', annual=False):
         plt.show()
         
         return ax
-    
-    handle = []  # 
- 
-    # #=== Plot Observed Trend ===
-
-    # y = df.temp.values
-    # yt = df.trend.values
-    # slope = (yt[-1] - yt[0]) / len(yt)
-    # intercept = yt[0]
-    # ytp = slope * xpi + intercept
-    # ax = plot(y, yt, ytp)
-    
+         
     #=== Plot trend compared with natural influences ===
     
     y = df.temp.values
@@ -424,7 +414,8 @@ def plotTempTrend(source='hadcrut', annual=False):
     ax = plot(y, yt, ytp, win_name='projection_compare',
               title_app=', Comparing Natural Influences')
     y = (df.vars + df.linear).values
-    ax.plot(df.index.values, y)
+    ax.plot(df.index.values, y, label = 'Natural Influences')
+    ax.legend(loc="center left")
     
     #=== Plot Trend with natural influences removed ===
     
@@ -435,7 +426,8 @@ def plotTempTrend(source='hadcrut', annual=False):
     ytp = slope * xpi + intercept
     ax = plot(y, yt, ytp, win_name='projection_reduced',
               title_app=', Natural Influences Removed')
-    
+    ax.legend(loc="center left")
+
     plt.show()
     return
 
