@@ -1,12 +1,22 @@
 # Experiment Notes
 
+## 2024-02-21
+
+* New priority: see if the temperature is accellerating.
+
+## 2024-02-20
+
+* started a plotting function to explain how the ocean warming curve is applied.
+
 ## 2024-02-15
 
 * The pre-industrial era (PIE) offset changed  
     * from 0.3117  
     * to 0.366609  
   This is the the offset from 1850-1899 to 1961-1990 in Hadcrut5. Other termperature
-  sources are normalized with this value.
+  sources are normalized with this value. I.e. all datasets are normalized by
+  subracting the mean of 1961-1990, then adding 0.366609 so than now the mean
+  of 1961-1990 = 0.366609 for all sets.
   
 * The plots were finalized for posting.
 
