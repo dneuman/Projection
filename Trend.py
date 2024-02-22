@@ -169,6 +169,7 @@ def analyzeData(xdata, ydata, stdDevs=2.):
     else: y = ydata
     lsq = linearFit(x, y)
     nu = dataPerDegreeOfFreedom(x, y, lsq)
+    nu = max(nu, 0)
     lsq.sigma = (nu * lsq.slopeVar)**0.5
     lsq.nu = nu
     lsq = confidenceInterval(x, y, stdDevs * nu**0.5, lsq)

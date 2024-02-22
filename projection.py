@@ -624,25 +624,41 @@ def plotWarming():
     vol = calc_volcano(annual=True)
     return vol  # temporary
     
-def plotRate(source='hadcrut', stdDevs=2.):
+def plotRate(source='hadcrut', stdDevs=2., reduced=False, annual=False):
     """ Plot charts determining the global temperature warming rate since 1980
         and see if there is any statistically relevant acceleration.
     """
-    temp = ds.load_modern(source, annual=False)
-    temp = temp.loc[temp.index.year >= 1980]
+    start = 1980
+    if not reduced:
+        temp = ds.load_modern(source, annual=annual)
+    else:
+        df = fit_vars(source=source, annual=annual)
+        temp = pd.DataFrame(columns=['Data'], index=df.index)
+        temp.spec = ''
+        temp.spec = df.spec
+        temp.Data = df.reduced + df.linear
+    if annual:
+        temp = temp.loc[temp.index >= start]
+    else:
+        temp = temp.loc[temp.index.year >= start]
     tr.convertYear(temp)  # add a fractional year for the x-axis
     # get data as Numpy arrays
     x = temp.Year.to_numpy()
     y = temp.Data.to_numpy()
     lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-    mx, my = tr.movingAverage(x, y, 1*12)  # 1-year moving average
+    mx, my = tr.movingAverage(x, y, 12-annual*7)  # 1-year moving average
     
     # === Plot since 1980 ===
     
+    pt = {True:'Annual', False:'Monthly'}  # period text
+    pi = {True:1, False:12}  # period index
+    rt = {True:'(natural influences removed)', False:''}
+    ylabel = (f'{temp.spec.name} {pt[annual]} Change from Pre-Industrial,'+
+              f'°C {rt[reduced]}')
     ax = new_axes(name='Full Trend',
                   title='Temperature Trend since 1980',
-                  ylabel=f'{temp.spec.name} Monthly Change from Pre-Industrial, °C')
-    ax.plot(x, y, 'k+', alpha=0.3)     # data
+                  ylabel=ylabel)
+    ax.plot(x, y, 'k+', alpha=0.3+.3*annual)     # data
     ax.plot(mx, my, 'g-', lw=2)        # moving average
     ax.plot(lsq.x, lsq.y, 'b-', lw=3)  # trend
     ax.plot(x, lsq.y1, 'b-', lw=1) # lower limit
@@ -655,19 +671,22 @@ def plotRate(source='hadcrut', stdDevs=2.):
     
     # === Plot comparison of 10 vs 20 year trend ===
     
+    ylabel = (f'{temp.spec.name} {pt[annual]} Change from Pre-Industrial,'+
+              f'°C {rt[reduced]}')
     axs = new_fig_rows('Compare Trends',
                        title='Comparing Trends with Differing Amounts of Data',
-                       ylabel=f'{temp.spec.name} Monthly Change from Pre-Industrial, °C',
+                       ylabel=ylabel,
                        num=2)
-    a = temp.iloc[-20*12:]  # last 20 years
-    b = temp.iloc[-10*12:]  # last 10 years
+    a = temp.iloc[-20*pi[annual]:]  # last 20 years
+    b = temp.iloc[-10*pi[annual]:]  # last 10 years
     for d, ax, txt in zip([a, b], axs, ['20-Year Trend', '10-Year Trend']):
         x = d.Year.to_numpy()
         y = d.Data.to_numpy()
         lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-        mx, my = tr.movingAverage(x, y, 1*12)  # 1-year moving average
-        ax.plot(x, y, 'k+', alpha=0.3)     # data
-        ax.plot(mx, my, 'g-', lw=2)        # moving average
+        ax.plot(x, y, 'k+', alpha=0.3+.3*annual)     # data
+        if not annual:
+            mx, my = tr.movingAverage(x, y, 1*12)  # 1-year moving average
+            ax.plot(mx, my, 'g-', lw=2)        # moving average
         ax.plot(lsq.x, lsq.y, 'b-', lw=3)  # trend
         ax.plot(x, lsq.y1, 'b-', lw=1) # lower limit
         ax.plot(x, lsq.y2, 'b-', lw=1) # upper limit
@@ -682,11 +701,12 @@ def plotRate(source='hadcrut', stdDevs=2.):
     # set up data store for calculations
     columns = ['before', 'bhi', 'blo', 'after', 'ahi', 'alo']
     df = pd.DataFrame(index=temp.index, columns=columns, dtype=np.float64)
-    lim = 5*12  # minimum number of months for slope
+    df['Year'] = temp.Year
+    lim = 5 * (12 - 11*annual)  # minimum number of months/years for slope
     
     # calculate trend line from d to end of data
     for d in df.index[lim:-lim]:
-        t = temp.loc[temp.index < d, ['Data', 'Year']]
+        t = temp.loc[temp.index <= d, ['Data', 'Year']]
         x = t.Year.to_numpy()
         y = t.Data.to_numpy()
         lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
@@ -705,19 +725,21 @@ def plotRate(source='hadcrut', stdDevs=2.):
         df.ahi[d] = lsq.slope * 10 + dev
         df.alo[d] = lsq.slope * 10 - dev
     # plot the before and after slopes
+    pt2 = {True:'Year', False:'Month'}
     ax = new_axes(name='Slopes',
-                  title='Comparing Trends Before and After Each Month',
-                  ylabel='Trend in °C per decade')
+                  title=f'Comparing Trends Before and After Each {pt2[annual]}',
+                  ylabel=f'Trend in °C per decade {rt[reduced]}')
     ax.plot(df.before, '-', color='C0', lw=3, label='Trend Before Date')
     ax.fill_between(df.index, df.blo, df.bhi, color='C0', alpha=0.25)
     ax.plot(df.after, '-', color='C1', lw=3, label='Trend After Date')
     ax.fill_between(df.index, df.alo, df.ahi, color='C1', alpha=0.25)
+    ax.set_ylim(-.2, .4)
     ax.legend(loc='upper center')
     
     # === plot histograms for lowest overlap ===
     
     df['overlap'] = df.bhi - df.alo
-    imin = df.overlap.loc[df.index.year>2000].idxmin() 
+    imin = df.overlap.loc[df.Year>2000].idxmin() 
     print(df.loc[imin])
 
     plt.show()
