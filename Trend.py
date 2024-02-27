@@ -4,6 +4,7 @@
 defs useful for calculating trends and their confidence levels
 
 Ported from Javascript
+https://skepticalscience.com/trend.php
 (c) Skeptical Science 2012
 Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
 https://creativecommons.org/licenses/by-sa/3.0/
@@ -50,29 +51,31 @@ def selectData(data, cn=None, start=None, end=None):
     d = data.loc[data['Year'].between(start, end)]
     return d['Year'], d[cn]
 
-def linearFit(xdata, ydata):
+def linearFit(x, y):
     """ Determines the linear fit to supplied Numpy arrays. Use
         `df['Column Name'].values` to extract array from DataFrame.
         Returns dictionary of results.
         xdata, ydata: (numpy array) Input x and y data
     """
     # accumulate sums
-    n = len(xdata)
-    sx = xdata.mean()
-    sy = ydata.mean()
-    sxx = (xdata*xdata).mean()
-    sxy = (xdata*ydata).mean()
+    n = len(x)
+    sx = x.mean()
+    sy = y.mean()
+    sxx = (x*x).mean()
+    sxy = (x*y).mean()
     # trend
     if sxx > sx*sx:
         b = (sxy - sx*sy)/(sxx - sx*sx)
     else: b=0
     a = sy - b*sx
     # uncertainty
-    sd2 = ((ydata - (a+b*xdata))**2).sum()/(n - 2)  # residual variance
+    sd2 = ((y - (a+b*x))**2).sum()/(n - 2)  # residual variance
     sb2 = sd2/(n*(sxx-sx*sx))  # slope variance
     sa2 = sxx*sb2  # residual variance
     # package results
     lsq = Holder()  # empty object
+    lsq.x = x
+    lsq.y = y
     lsq.n = n
     lsq.sx = sx
     lsq.sy = sy
@@ -83,8 +86,8 @@ def linearFit(xdata, ydata):
     lsq.slopeVar = sb2
     lsq.interceptVar = sa2
     lsq.residualVar = sd2
-    lsq.x = np.array([xdata.min(), xdata.max()])
-    lsq.y = a + b * lsq.x
+    lsq.xline = np.array([x.min(), x.max()])
+    lsq.yline = a + b * lsq.xline
     return lsq
 
 def dataPerDegreeOfFreedom(xdata, ydata, lsq=None):
@@ -121,7 +124,8 @@ def autocovariance(data, j):
 #  return cx/n;
     n = len(data)
     sx = data.mean()
-    cx = ((data[:n-j] - sx) * (data[j:] - sx)).mean()
+    rx = data - sx
+    cx = (rx[:n-j] * rx[j:]).mean()
     return cx
 
 def movingAverage(xdata, ydata, period):
@@ -138,10 +142,10 @@ def movingAverage(xdata, ydata, period):
         y.append(ydata[i:i+period].mean())
     return  x, y
 
-def confidenceInterval(xdata, ydata, sigma, lsq=None):
+def confidenceInterval(xdata, ydata, stdDevs, lsq=None):
     """ Calculate the slope limits for the supplied confidence limit.
         xdata, ydata: (numpy array) data to be analyzed
-        sigma:        (float) Value of deviation to use for interval
+        stdDevs:      (float) number of standard deviations to use for interval
         lsq:          (object) Optional least squares data. Will calculate
                       if not supplied.
         Returns lsq with y1 and y2 added
@@ -150,7 +154,7 @@ def confidenceInterval(xdata, ydata, sigma, lsq=None):
         lsq = linearFit(xdata, ydata)
     y = lsq.intercept + lsq.slope * xdata
     xvar = (xdata - lsq.sx)**2
-    dy = sigma * (lsq.residualVar * (1 + xvar/(lsq.sxx-lsq.sx**2))/lsq.n)**0.5
+    dy = stdDevs * (lsq.residualVar * (1 + xvar/(lsq.sxx-lsq.sx**2))/lsq.n)**0.5
     lsq.y1 = y - dy
     lsq.y2 = y + dy
     return lsq
@@ -169,7 +173,6 @@ def analyzeData(xdata, ydata, stdDevs=2.):
     else: y = ydata
     lsq = linearFit(x, y)
     nu = dataPerDegreeOfFreedom(x, y, lsq)
-    nu = max(nu, 0)
     lsq.sigma = (nu * lsq.slopeVar)**0.5
     lsq.nu = nu
     lsq = confidenceInterval(x, y, stdDevs * nu**0.5, lsq)
@@ -197,8 +200,8 @@ def analyzeRate(df, cn, window, stdDevs=2.):
         nu = dataPerDegreeOfFreedom(x, y, lsq)
         sigma = (nu * lsq.slopeVar)**0.5 * stdDevs
         df.loc[i, 'Rate'] = lsq.slope
-        df.loc[i, 'Rate-'] = lsq.slope - sigma
-        df.loc[i, 'Rate+'] = lsq.slope + sigma
+        df.loc[i, 'R1'] = lsq.slope - sigma
+        df.loc[i, 'R2'] = lsq.slope + sigma
 
 def example():
     import matplotlib.pyplot as plt

@@ -17,6 +17,7 @@ import xarray as xr
 
 dst = ds.dst  # Data Store, an object that loads and stores data in a common format
 plt.style.use('clean')
+pd.options.display.float_format = '{:.3f}'.format  # change print format
 
 yn, mn, dn, en, sn = ['Year', 'Month', 'Data', 'Error', 'Smooth']
 
@@ -259,7 +260,26 @@ def fit_vars(source='hadcrut', annual=False, df=None):
     print(f'New slope is {(c[-2]*rate):.3f}°C/decade')
     r2 = tls.R2(df.detrend.values, df.vars.values)
     print(f'R² value is {r2:.3f}')
-    return df    
+    return df  
+
+def get_temp(source='hadcrut', reduced=False, annual=False):
+    ''' Return a temperature dataframe based on the input requirements
+    '''
+    start = 1980
+    if not reduced:
+        temp = ds.load_modern(source, annual=annual)
+    else:
+        df = fit_vars(source=source, annual=annual)
+        temp = pd.DataFrame(columns=['Data'], index=df.index)
+        temp.spec = ''
+        temp.spec = df.spec
+        temp.Data = df.reduced + df.linear
+    if annual:
+        temp = temp.loc[temp.index >= start]
+    else:
+        temp = temp.loc[temp.index.year >= start]
+    tr.convertYear(temp)  # add a fractional year for the x-axis
+    return temp
 
 # %% Plotting helpers
 
@@ -628,20 +648,7 @@ def plotRate(source='hadcrut', stdDevs=2., reduced=False, annual=False):
     """ Plot charts determining the global temperature warming rate since 1980
         and see if there is any statistically relevant acceleration.
     """
-    start = 1980
-    if not reduced:
-        temp = ds.load_modern(source, annual=annual)
-    else:
-        df = fit_vars(source=source, annual=annual)
-        temp = pd.DataFrame(columns=['Data'], index=df.index)
-        temp.spec = ''
-        temp.spec = df.spec
-        temp.Data = df.reduced + df.linear
-    if annual:
-        temp = temp.loc[temp.index >= start]
-    else:
-        temp = temp.loc[temp.index.year >= start]
-    tr.convertYear(temp)  # add a fractional year for the x-axis
+    temp = get_temp(source, reduced, annual)
     # get data as Numpy arrays
     x = temp.Year.to_numpy()
     y = temp.Data.to_numpy()
@@ -658,11 +665,11 @@ def plotRate(source='hadcrut', stdDevs=2., reduced=False, annual=False):
     ax = new_axes(name='Full Trend',
                   title='Temperature Trend since 1980',
                   ylabel=ylabel)
-    ax.plot(x, y, 'k+', alpha=0.3+.3*annual)     # data
     ax.plot(mx, my, 'g-', lw=2)        # moving average
-    ax.plot(lsq.x, lsq.y, 'b-', lw=3)  # trend
+    ax.plot(lsq.xline, lsq.yline, 'b-', lw=2)  # trend
     ax.plot(x, lsq.y1, 'b-', lw=1) # lower limit
     ax.plot(x, lsq.y2, 'b-', lw=1) # upper limit
+    ax.plot(x, y, 'k+', alpha=(0.3+.3*annual), lw=2)     # data
     # label chart
     error = stdDevs * lsq.sigma
     text = f'Trend: {lsq.slope*10:.3f}±{error*10:.3f} °C/decade'
@@ -683,11 +690,11 @@ def plotRate(source='hadcrut', stdDevs=2., reduced=False, annual=False):
         x = d.Year.to_numpy()
         y = d.Data.to_numpy()
         lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-        ax.plot(x, y, 'k+', alpha=0.3+.3*annual)     # data
+        ax.plot(x, y, 'k+', alpha=(0.3+.3*annual), lw=1)     # data
         if not annual:
             mx, my = tr.movingAverage(x, y, 1*12)  # 1-year moving average
             ax.plot(mx, my, 'g-', lw=2)        # moving average
-        ax.plot(lsq.x, lsq.y, 'b-', lw=3)  # trend
+        ax.plot(lsq.xline, lsq.yline, 'b-', lw=2)  # trend
         ax.plot(x, lsq.y1, 'b-', lw=1) # lower limit
         ax.plot(x, lsq.y2, 'b-', lw=1) # upper limit
         # label chart
@@ -699,52 +706,120 @@ def plotRate(source='hadcrut', stdDevs=2., reduced=False, annual=False):
     # === Plot trends from moving breakpoint ===
     
     # set up data store for calculations
-    columns = ['before', 'bhi', 'blo', 'after', 'ahi', 'alo']
+    columns = ['before', 'bhi', 'blo', 'after', 'ahi', 'alo',
+               'bnu', 'bsy', 'bsxy', 
+               'anu', 'asy', 'asxy']
+    sides = columns[0:6:3]
+    highs = columns[1:6:3]
+    lows = columns[2:6:3]
+    nus = columns[6::3]
+    sys = columns[7::3]
+    sxys = columns[8::3]
     df = pd.DataFrame(index=temp.index, columns=columns, dtype=np.float64)
     df['Year'] = temp.Year
     lim = 5 * (12 - 11*annual)  # minimum number of months/years for slope
     
     # calculate trend line from d to end of data
+    cols = ['Data', 'Year']
+    unit = 10.
     for d in df.index[lim:-lim]:
-        t = temp.loc[temp.index <= d, ['Data', 'Year']]
-        x = t.Year.to_numpy()
-        y = t.Data.to_numpy()
-        lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-        df.before[d] = lsq.slope * 10
-        dev = stdDevs * lsq.sigma * 10
-        df.bhi[d] = lsq.slope * 10 + dev
-        df.blo[d] = lsq.slope * 10 - dev
-    # calculate trend line for data before d
-    for d in df.index[lim:-lim]:
-        t = temp.loc[temp.index >= d, ['Data', 'Year']]
-        x = t.Year.to_numpy()
-        y = t.Data.to_numpy()
-        lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-        df.after[d] = lsq.slope * 10
-        dev = stdDevs * lsq.sigma * 10
-        df.ahi[d] = lsq.slope * 10 + dev
-        df.alo[d] = lsq.slope * 10 - dev
+        t1 = temp.loc[temp.index <= d, cols]
+        t2 = temp.loc[temp.index >= d, cols]
+        for t, side, hi, lo, nu, sy, sxy in zip([t1, t2], sides, highs, lows,
+                                   nus, sys, sxys):
+            x = t.Year.to_numpy()
+            y = t.Data.to_numpy()
+            lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
+            dev = stdDevs * lsq.sigma * unit
+            df.loc[d, side] = lsq.slope * unit
+            df.loc[d, hi] = lsq.slope * unit + dev
+            df.loc[d, lo] = lsq.slope * unit - dev
+            df.loc[d, nu] = lsq.nu
+            df.loc[d, sy] = lsq.sy
+            df.loc[d, sxy] = lsq.sxy
+            
     # plot the before and after slopes
     pt2 = {True:'Year', False:'Month'}
     ax = new_axes(name='Slopes',
                   title=f'Comparing Trends Before and After Each {pt2[annual]}',
-                  ylabel=f'Trend in °C per decade {rt[reduced]}')
+                  ylabel=f'{temp.spec.name} Trend in °C per decade {rt[reduced]}')
     ax.plot(df.before, '-', color='C0', lw=3, label='Trend Before Date')
     ax.fill_between(df.index, df.blo, df.bhi, color='C0', alpha=0.25)
     ax.plot(df.after, '-', color='C1', lw=3, label='Trend After Date')
     ax.fill_between(df.index, df.alo, df.ahi, color='C1', alpha=0.25)
     ax.set_ylim(-.2, .4)
+    ax.plot([], [], 'k-', lw=10, alpha=0.15, label='95% Confidence Ranges')
     ax.legend(loc='upper center')
     
     # === plot histograms for lowest overlap ===
     
     df['overlap'] = df.bhi - df.alo
     imin = df.overlap.loc[df.Year>2000].idxmin() 
+    print(imin)
     print(df.loc[imin])
 
     plt.show()
-
-plotRate()
+    return df
     
+# df = plotRate(annual=False, reduced=True)
+    
+def plot_break(point, source='hadcrut', stdDevs=2., reduced=False, annual=False):
+    ''' Plot the slopes before and after a supplied break point. The point
+        must be in integer or floating point years (fractional).
+    '''
+    temp = get_temp(source, reduced, annual)
+    rt = {True:'(natural influences removed)', False:''}
+    rt1 = {True:'_Reduced', False:''}
+    pt = {True:'Annual', False:'Monthly'}  # period text
+    ax = new_axes(name=f'Break_{pt[annual]}{rt1[reduced]}_{point}',
+                  title=f'Comparing {pt[annual]} Trends Before and After {point}',
+                  ylabel=f'{temp.spec.name} Trend in °C per decade {rt[reduced]}')
+    t1 = temp.loc[temp.Year <= point, ['Data', 'Year']]
+    t2 = temp.loc[temp.Year >= point, ['Data', 'Year']]
+    labels = ['Before', 'After']
+    colors = ['C0', 'C1']
+    unit = 10  # °C/decade
+    md = [0,1]  # metadata for before and after
+    for t, idx, c, label in zip([t1, t2], [0,1], colors, labels):
+        x = t.Year.to_numpy()
+        y = t.Data.to_numpy()
+        lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
+        md[idx] = lsq
+        x = [t.Year.iloc[0], t.Year.iloc[-1]]
+        y = [lsq.slope * unit, lsq.slope * unit]
+        ax.plot(x, y, '-', color=c, lw=2, label=label)
+        err = lsq.sigma * stdDevs * unit
+        ax.fill_between(x, y-err, y+err, color=c, alpha=0.15)
+    tr.analyzeRate(temp, 'Data', window=20., stdDevs=stdDevs)
+    x = temp.Year.to_numpy()
+    y = temp.Rate.to_numpy() * unit
+    ax.plot(x, y, 'k-', lw=1, label='Rate with 20-year window')
+    ax.fill_between(x, temp.R1*unit, temp.R2*unit, color='k', alpha=.05)
+    ax.set_ylim(0, .6)
+    ax.plot([], [], 'k-', lw=10, alpha=0.15, label='95% Confidence Ranges')
+    ax.legend(loc='upper left')
+    
+    # === Plot temperature with these trends ===
+    
+    ax = new_axes(name=f'Slopes_{pt[annual]}{rt1[reduced]}_{point}',
+                  title=f'Comparing {pt[annual]} Trends Before and After {point:.0f}',
+                  ylabel=f'{temp.spec.name} °C {rt[reduced]}')
+    # Get x-value where the trend lines intercept
+    # d = (md[1].intercept - md[0].intercept)/(md[0].slope - md[1].slope)
+    # md[0].xline[1] = d
+    # md[1].xline[0] = d
+    md[0].xline[1] = temp.Year.iloc[-1]
+    for lsq, c in zip(md, colors):
+        ax.plot(lsq.x, lsq.y1, '-', color=c, lw=0.5)
+        ax.plot(lsq.x, lsq.y2, '-', color=c, lw=0.5)
+        yline = lsq.slope * lsq.xline + lsq.intercept
+        ax.plot(lsq.xline, yline, '-', color=c, lw=2)
+    ax.plot(temp.Year.values, temp.Data.values, 'k+', alpha=0.4)
+    
+
+    plt.show()
+
+plot_break(2002, reduced=True, annual=False)
+# plot_break('2010-12-01', annual=False, reduced=True)
 
     

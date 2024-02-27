@@ -1,11 +1,18 @@
 # Experiment Notes
 
+## 2024-02-27
+
+* Fixed some persistent plotting problems with mothly data
+
+* 2002 produces a really small `nu` value before and after. This makes the 
+estimated error very small. Must investigate further.
+
 ## 2024-02-22
 
 * Made the charts include annual and reduced data. Also had both slopes (before
 and after the breakpoint) include the breakpoint. Before, the before slope did 
 not include it. The downside of this is that outliers will exacerbate the 
-differences in the two slope, bringing them in opposite directions.
+differences in the two slopes, bringing them in opposite directions.
 
 ## 2024-02-21
 
