@@ -20,6 +20,163 @@ import numpy as np
 class Holder:
     """ Simple class to hold data as attributes.
     """
+    
+def padded(s, size, ptype='linear'):
+    """Takes a series and returns a version padded at both ends.
+
+    Parameters
+    ----------
+    s : pd.Series
+        Series to be padded
+    size : int
+        Size of window being used. The returned series will be
+        (size - 2) bigger than the supplied series.
+    type : str ['linear' | 'mirror'] default 'linear'
+        Type of padding to use. 'Linear' fits a line to the end data of length
+        ``size`` and uses that to fill the start and end padding. 'Mirror'
+        copies and reflects the data instead.
+
+    Notes
+    -----
+    'mirror' uses actual data for padding, but results in zero-slope
+    (horizontal) end points. 'linear' will usually give better results.
+    """
+
+    if type(s) != pd.Series:  # Check for dataframe
+        s = s.iloc[:, 0]  # use first column as a series
+    n = len(s)
+    hw = size//2  # half-window size
+    tx = np.array(s.index)
+    ty = np.array(s.values)
+    x = np.zeros(n + 2 * hw, dtype=s.index.dtype)
+    y = np.zeros(n + 2 * hw)
+    x[hw:hw+n] = tx  # add actual data
+    y[hw:hw+n] = ty
+
+    # x-value intervals are mirrored in both cases
+    for i in range(hw):  # pad beginning
+        x[i] = tx[0] - (tx[hw-i] - tx[0])
+    for i in range(hw):  # pad end
+        x[i+hw+n] = tx[n-1] + (tx[n-1] - tx[n-2-i])
+
+    if ptype.lower() == 'mirror':
+        # pad data as a reflection of original data. eg use index values:
+        # 2, 1, 0, 1, 2, 3, 4, 5 and
+        # n-3, n-2, n-1, n-2, n-3, n-4
+        for i in range(hw):  # pad beginning
+            y[i] = ty[hw-i]
+        for i in range(hw):  # pad end
+            y[i+hw+n] = ty[n-2-i]
+    else:
+        # use 'linear' for any other input
+        # Note that x values may be dates, so normalize them so fit line
+        # coefficients are not too large
+        ix = x.copy()
+        if type(x[0]) == np.datetime64:
+            # make days, then floats
+            tx = (tx - x[0]).astype('m8[D]').astype(np.float64)
+            ix = (ix - x[0]).astype('m8[D]').astype(np.float64)
+        # fit a line to start
+        c = np.polyfit(tx[:hw], ty[:hw], 1)
+        p = np.poly1d(c)
+        y[:hw] = p(ix[:hw])
+        # fit a line to end
+        c = np.polyfit(tx[-hw:], ty[-hw:], 1)
+        p = np.poly1d(c)
+        y[-hw:] = p(ix[-hw:])
+
+    return pd.Series(y, index=x)   
+ 
+def lowess(data, f=2./3., pts=None, itns=3, order=1,
+           pad='linear', **kwargs):
+    """ Locally-Weighted Slope Smoothing. Fits a nonparametric regression 
+        curve to a scatterplot.
+
+    Parameters
+    ----------
+    data : pandas.Series
+        Data points in the scatterplot. The
+        function returns the estimated (smooth) values of y.
+    f : float default 2/3
+        The fraction of the data set to use for smoothing. A
+        larger value for f will result in a smoother curve.
+    pts : int default None
+        The explicit number of data points to be used for
+        smoothing instead of f.
+    itn : int default 3
+        The number of robustifying iterations. The function will run
+        faster with a smaller number of iterations.
+    order : int default 1
+        The order of the polynomial used for fitting. Defaults to 1
+        (straight line). Values < 1 are made 1. Larger values should be
+        chosen based on shape of data (# of peaks and valleys + 1)
+    pad : str ['linear' | 'mirror' | None] default 'linear'
+        Type of padding to use. If no padding desired, use ``None``.
+
+    Returns
+    -------
+    pandas.Series containing the smoothed data.
+
+    Notes
+    -----
+    Surprisingly works with pd.DateTime index values.
+    """
+    # Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+    #            original
+    #          Dan Neuman <https://github.com/dneuman>
+    #            converted to Pandas series, extended to polynomials,
+    #            and added padding option.
+    # License: BSD (3-clause)
+
+    n = len(data)
+    if pts is None:
+        f = np.min([f, 1.0])
+        r = int(np.ceil(f * n))
+    else:  # allow use of number of points to determine smoothing
+        r = int(np.min([pts, n]))
+    r = min([r, n-1])
+    order = max([1, order])
+    if pad:
+        s = padded(data, r*2, ptype=pad)
+        x = np.array(s.index)
+        y = np.array(s.values)
+        n = len(y)
+    else:
+        x = np.array(data.index)
+        y = np.array(data.values)
+    # condition x-values to be between 0 and 1 to reduce errors in linalg
+    x = x - x.min()
+    x = x / x.max()
+    # Create matrix of 1, x, x**2, x**3, etc, by row
+    xm = np.array([x**j for j in range(order+1)])
+    # Create weight matrix, one column per data point
+    h = [np.sort(np.abs(x - x[i]))[r] for i in range(n)]
+    w = np.clip(np.abs((x[:, None] - x[None, :]) / h), 0.0, 1.0)
+    w = (1 - w ** 3) ** 3
+    # Set up output
+    yEst = np.zeros(n)
+    delta = np.ones(n)  # Additional weights for iterations
+    for iteration in range(itns):
+        for i in range(n):
+            weights = delta * w[:, i]
+            xw = np.array([weights * x**j for j in range(order+1)])
+            b = xw.dot(y)
+            a = xw.dot(xm.T)
+            beta = np.linalg.solve(a, b)
+            yEst[i] = sum([beta[j] * x[i]**j for j in range(order+1)])
+        # Set up weights to reduce effect of outlier points on next iteration
+        residuals = y - yEst
+        s = np.median(np.abs(residuals))
+        delta = np.clip(residuals / (6.0 * s), -1, 1)
+        delta = (1 - delta ** 2) ** 2
+    if pad:
+        n = len(data)
+        return pd.Series(yEst[r:n+r], index=data.index,
+                         name='Locally Weighted Smoothing')
+    else:
+        return pd.Series(yEst, index=data.index,
+                         name='Locally Weighted Smoothing')
+
 
 def convertYear(data):
     """ Add a 'Year' column, if it does not already exist, containing
@@ -88,6 +245,7 @@ def linearFit(x, y):
     lsq.residualVar = sd2
     lsq.xline = np.array([x.min(), x.max()])
     lsq.yline = a + b * lsq.xline
+    lsq.res = lsq.y - (a + b * x)
     return lsq
 
 def dataPerDegreeOfFreedom(xdata, ydata, lsq=None):
@@ -123,8 +281,7 @@ def autocovariance(data, j):
 #    cx += (data[i]-sx)*(data[i+j]-sx);
 #  return cx/n;
     n = len(data)
-    sx = data.mean()
-    rx = data - sx
+    rx = data - data.mean()
     cx = (rx[:n-j] * rx[j:]).mean()
     return cx
 
@@ -173,9 +330,10 @@ def analyzeData(xdata, ydata, stdDevs=2.):
     else: y = ydata
     lsq = linearFit(x, y)
     nu = dataPerDegreeOfFreedom(x, y, lsq)
-    lsq.sigma = (nu * lsq.slopeVar)**0.5
+    nu_adj = max(1., nu)
+    lsq.sigma = (nu_adj * lsq.slopeVar)**0.5
     lsq.nu = nu
-    lsq = confidenceInterval(x, y, stdDevs * nu**0.5, lsq)
+    lsq = confidenceInterval(x, y, stdDevs * nu_adj, lsq)
     return lsq
 
 def analyzeRate(df, cn, window, stdDevs=2.):
@@ -198,7 +356,8 @@ def analyzeRate(df, cn, window, stdDevs=2.):
         y = d[cn].values
         lsq = linearFit(x, y)
         nu = dataPerDegreeOfFreedom(x, y, lsq)
-        sigma = (nu * lsq.slopeVar)**0.5 * stdDevs
+        nu_adj = max(1., nu)
+        sigma = (nu_adj * lsq.slopeVar)**0.5 * stdDevs
         df.loc[i, 'Rate'] = lsq.slope
         df.loc[i, 'R1'] = lsq.slope - sigma
         df.loc[i, 'R2'] = lsq.slope + sigma

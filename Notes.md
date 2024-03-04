@@ -1,18 +1,61 @@
 # Experiment Notes
 
+## 2024-03-04
+
+* Significant work done:
+
+    * New annual data approach should work with all plot functions
+    
+    * Added a Chow Test to assess breaks in data
+    
+    * still looking at how the `nu` value works. Clipped it to 1.0 
+      whenever it goes below that amount. This prevents the variance
+      from decreasing below the calculated value.
+      
+    * Added a simple exponential function to model a more gradual
+      warming.
+
+### Next:
+
+* Add the ability to use the simple exponential function for all 
+  variables (find optimum value in advance for each).
+  
+* Add the ability to just use lags (as per Foster and Rahmstorf 2011).
+  Again find the optimum value in advance for each).
+
+## 2024-02-28
+
+* Removed periodic signal
+
+* Changed fitting to only work on monthly data, then convert to annual if
+  required.
+  
+* Changed fitting to use lowess smoothing for removing trend, instead of a
+  straight line. Lowess smoothing uses locally weighted slopes for each
+  point of data.
+
+## 2024-02-28
+
+* Added smoothing to ENSO values.
+
+* Consider making smoothing function an optimized exponential like Tomino
+
+* Check residual for any periodic signal with FFT as in Foster and 
+  Rahmstorf, 2011
+
 ## 2024-02-27
 
-* Fixed some persistent plotting problems with mothly data
+* Fixed some persistent plotting problems with monthly data
 
 * 2002 produces a really small `nu` value before and after. This makes the 
-estimated error very small. Must investigate further.
+  estimated error very small. Must investigate further.
 
 ## 2024-02-22
 
 * Made the charts include annual and reduced data. Also had both slopes (before
-and after the breakpoint) include the breakpoint. Before, the before slope did 
-not include it. The downside of this is that outliers will exacerbate the 
-differences in the two slopes, bringing them in opposite directions.
+  and after the breakpoint) include the breakpoint. Before, the before slope did 
+  not include it. The downside of this is that outliers will exacerbate the 
+  differences in the two slopes, bringing them in opposite directions.
 
 ## 2024-02-21
 

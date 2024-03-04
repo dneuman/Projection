@@ -30,7 +30,7 @@ best:
   save_as: 'best_monthly.txt'
 
 hadcrut:
-  name: 'Hadcrut5'
+  name: 'UK Met Office'
   url: 'https://www.metoffice.gov.uk/hadobs/hadcrut5/data/HadCRUT.5.0.2.0/analysis/diagnostics/HadCRUT.5.0.2.0.analysis.summary_series.global.monthly.csv'
   format:
     sep: ','
@@ -43,7 +43,7 @@ hadcrut:
   save_as: 'hadcrut5_monthly.txt'
 
 giss:
-  name: 'GISTEMP v4'
+  name: 'NASA'
   url: 'https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv'
   format:
     sep: ','
