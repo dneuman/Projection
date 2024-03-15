@@ -143,7 +143,7 @@ def load_modern(f: str, annual=True):
                 df['m'] = df.index.strftime('%Y-%m-01')
                 df = df.groupby('m').mean()
                 df.index = pd.to_datetime(df.index)
-    df.spec = ''  # prevent error message about creating columns this way
+    df.spec = ''  # avoid warning for setting columns
     df.spec = spec
     return df
 
@@ -202,7 +202,7 @@ def load_processed(f: str):
     spec = make_spec(dst.specs[f])
     df = pd.read_csv(pre+spec.save_as, sep='\t', index_col=0, parse_dates=[0],
                      comment='#')
-    df.spec = ''
+    df.spec = ''  # avoid warning for setting columns
     df.spec = spec
     return df
 

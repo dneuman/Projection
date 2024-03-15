@@ -6,10 +6,16 @@ Basic tools for plotting and data processing
 @author: dan613
 """
 import matplotlib.pyplot as plt
+import matplotlib.image as img
+import matplotlib.offsetbox as ob
 import pandas as pd
 import datetime as dt
 import numpy as np
 from scipy.interpolate import UnivariateSpline as Spline
+
+byTxt = 'ottawa.place/@dan613 ©CC-BY 4.0'
+logo = None
+logo = 'Mastodon_icon.png'
 
 yn, mn, dn, en, nn, sn = ['Year', 'Month', 'Data',
                           'Error', 'Normalized', 'Smooth']
@@ -39,14 +45,39 @@ def byline(ax: plt.axes, x=0.01, y=0.01,
     """
     d = dt.datetime.now()
     date = d.strftime('%d %b %Y')
-    text = 'Chart: ottawa.place/@dan613 ©CC-BY 4.0' + '  ' + date
+    text = '   ' + byTxt + '  ' + date
     if ha=='right' and x==0.01:
         x = 0.99
     if va=='top' and y==0.01:
         y = 0.99
     txt = ax.text(x, y, text, fontsize='small', ha=ha, va=va,
                    transform=ax.transAxes, **kwargs)
+    if logo is None:
+        return txt
+    
+    # show logo in front of text
+    plt.Figure.draw_without_rendering(ax.figure)  # required to get extents
+    tbox = txt.get_window_extent()
+    h = tbox.height
+    x = tbox.bounds[0]
+    y = h/2 + tbox.bounds[1]
+    place_image(ax, logo, x, y, h)
     return txt
+
+def place_image(ax, url, x, y, h):
+    ''' Place an image onto an axes using the axes coordinates.
+        
+        x, y: position in display units within the axes.
+        h: height in pixels
+    '''
+    image = img.imread(url)
+    dpi = ax.figure.get_dpi()
+    pts = image.shape[1] / dpi * 72
+    scale = 0.7 * h / pts
+    box = ob.OffsetImage(image, zoom=scale, interpolation='bicubic')
+    ab = ob.AnnotationBbox(box, (x, y),frameon=False,
+                           xycoords=ax.transScale)
+    ax.add_artist(ab)
 
 def wrap(ax: plt.Axes, text: str, x: float, y: float, w: int, **kwargs):
     """ Wrap text in the supplied axes to width w in pixels
@@ -127,7 +158,7 @@ def addColor(ax, c):
     """
     ax.tick_params(axis='y', labelcolor=c)
     ax.yaxis.label.set_color(c)
-
+    
 #%% Data tools
 
 def gaussian(n=50, lim=3):
