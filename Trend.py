@@ -89,7 +89,7 @@ def padded(s, size, ptype='linear'):
  
 def lowess(data, f=2./3., pts=None, itns=3, order=1,
            pad='linear', **kwargs):
-    """ Locally-Weighted Slope Smoothing. Fits a nonparametric regression 
+    """ Locally-Weighted Scatterplot Smoothing. Fits a nonparametric regression 
         curve to a scatterplot.
 
     Parameters

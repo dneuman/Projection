@@ -1,10 +1,29 @@
 # Experiment Notes
 
+## 2024-03-30
+
+* Significant slope change pre-1990. Charts changed to post-1990 to reflect 
+  that.
+
+* Changed calculations to use fractional year. Rates are all 10 years/decade
+
+* Influences are fit using both lags and exponential smoothing at the same
+  time. A full search is performed to choose the best fit value. No smoothing
+  and using the CMIP values are also checked.
+
+* Having problems with using FFT. First, it provides the value for cosines, 
+  not sines. If I expand the dataset (zero padded) other than a multiple of
+  the total, an angle is changed so that the reconstructed cosine is correct
+  in the center of the data set, even though the frequency isn't quite 
+  correct. Not sure how this is calculated, yet. Not using in calculations for
+  now. 
+
 ## 2024-03-04
 
 * Significant work done:
 
-    * New annual data approach should work with all plot functions
+    * New annual data approach should work with all plot functions. Convert
+      to annual at the last moment.
     
     * Added a Chow Test to assess breaks in data
     

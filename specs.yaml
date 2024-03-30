@@ -48,11 +48,10 @@ giss:
   format:
     sep: ','
     header: 0
-    skiprows: 2
-    usecols: [0, 13]
-    names: ['Year', 'Data']
+    skiprows: 1
     index_col: 0
     na_values: '***'
+  table: True
   save_as: 'gistemp.txt'
 
 noaa:

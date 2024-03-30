@@ -62,10 +62,11 @@ def update_modern(f: str):
     table = spec.get('table', False)
     origin = spec.get('origin', None)  # used for julian dates
     if table:
-        fmt['names'] = list(range(1, 13))
+        fmt['names'] = [yn] + list(range(1, 13))
+        fmt['usecols'] = list(range(13))  # year plus months
     if 'start_year' in spec.keys():
         # File has unwanted info at end of file that could mess
-        # up the loading process. Just calculate the number of lines
+        # up the loading process. Calculate the number of lines
         # that are needed and load just those.
         start_year = spec['start_year']
         start_month = spec.get('start_month', 1)
@@ -124,6 +125,7 @@ def load_modern(f: str, annual=True):
     if f in dst.specs['temperature']:
         # assume temperatures have a datetime index
         # normalize to Hadcrut data for 1961-90
+        df['Raw'] = df[dn].to_numpy()  # force a copy
         df[dn] -= df.loc[(df.index.year>=1961)&(df.index.year<=1990), dn].mean()
         df[dn] += dst.specs['pie_offset']  # pre-industrial era
     if hasattr(df.index, 'month'):

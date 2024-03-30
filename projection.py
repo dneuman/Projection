@@ -78,12 +78,13 @@ def convolve_impulse(data: pd.Series,
     n = len(data)
     kernel = np.zeros(2 * n - 1)
     change = data.copy()
+    # have to assume the year before data starts is 0,
+    # otherwise mean shifts
     change.iloc[1:] -= data.iloc[:-1].values
-    change.iloc[0] = 0.0
-    result = pd.DataFrame(index=data.index)
     kernel[-n:] = impulse[dn].values
     c = np.convolve(change.values, kernel, 'valid')
-    result[dn] = c[0:n]
+    result = pd.Series(index=data.index,
+                       data=c[0:n])
     return result
 
 def fit(data, vars):
@@ -239,23 +240,94 @@ def chow(res, res1, res2, k):
     S = (res * res).sum()
     S12 = (res1 * res1).sum() + (res2 * res2).sum()
     C = ((S - S12)/Dn) / (S12 / Dd)
-    p = stats.f.sf(C, Dn, Dd)  # Dd is always larger
+    p = stats.f.sf(C, Dn, Dd)
     r = pd.Series([C, p, Dn, Dd], 
                   index=['Chow', 'p', 'DoF1', 'DoF2'])
     return r
 
+def fft(ds, mult=None):
+    ''' 
+    Return a DataFrame with the fft of the supplied residual series
+
+    Parameters
+    ----------
+    ds : pd.Series
+        Series to be analized. Any trends should be removed.
+        
+    mult : int
+        Desired multiple of length to do the FFT. Data is zero-padded.
+
+    Returns
+    -------
+    df : pd.DataFrame
+        DataFrame containing columns for 'period', 'complex', 'value', 
+        'angle'.
+
+    '''
+    if mult is None:
+        n = len(ds)
+    else:
+        n = mult * len(ds)
+    s = ds.to_numpy()
+    f = np.fft.rfft(s, n)
+    df = pd.DataFrame(index=np.arange(len(f)), dtype=np.float64)
+    df['period'] = (n-1)/df.index
+    df['complex'] = f
+    df['value'] = np.abs(df.complex)
+    df['angle'] = np.angle(df.complex)
+    return df.iloc[1:]  # remove constant value
+
+def fftn(ds, mult=None, verbose=False):
+    '''
+    Normalized FFT with noise baseline removed to identify signals. Calls
+    `fft` to perform calculations.
+
+    Parameters
+    ----------
+    ds : pandas.Series
+        Signal data.
+    mult : int, optional
+        Multiple of data length. The default is None.
+    verbose : bool, optional
+        If True, plot chart of fft data. The default is False.
+
+    Returns
+    -------
+    fft : pandas.Dataframe 
+        Has columns 'period', 'complex', 'value', 
+        'angle', 'base', and 'residual'.
+    '''
+    ft = fft(ds, mult)
+    ft.value /= ft.value.max()
+    nf = mult * len(ds)
+    ft['base'] = tr.lowess(ft.value, f=.25)
+    ft['residual'] = ft.value - ft.base
+    if verbose:
+        fm = ft.nlargest(3, 'residual')
+        ax = new_axes('FFT', 
+                      'Amplitude of Frequencies in Residual', 
+                      'Amplitude relative to maximum')
+        ax.set_xlabel(f'Cycles per {nf} Months')
+        ax.plot(ft.value)
+        ax.plot(ft.base)
+        ax.plot(fm.value, 'k+', lw=7)
+        plt.show()
+    return ft
+
+
 # %% Data Processing
 
-def compile_vars(source='hadcrut'):
+def compile_vars(source='hadcrut', start='1990-01-01'):
     """ Return DataFrame containing temperature, trend line, detrended 
         temperature, and environmental factors that might affect temperature.
     """
     temp = ds.load_modern(source, annual=False)    
-    start = pd.to_datetime('1980-01-01')
     end = temp.index[-1]
+    start = pd.to_datetime(start) # Start year for analysis
     df = pd.DataFrame(index=temp.loc[start:end].index)
     df.spec = ''  # avoid warning for setting columns
     df.spec = temp.spec
+    tr.convertYear(df)  # add a fractional year column for calculations
     df['temp'] = temp.loc[start:end, dn]
     df['lowess'] = tr.lowess(df.temp, pts=15*12)  # this is the local trend, not a line
     df['flat'] = df.temp - df.lowess
@@ -264,6 +336,7 @@ def compile_vars(source='hadcrut'):
     df['solar'] = dst.solar(annual=False).loc[start:end]
     df.solar -= df.solar.mean()  # remove offset
     enso = dst.enso(annual=False).loc[start:end]
+    enso -= enso.mean()
     df[enso.columns] = enso
         
     df.fillna(0, inplace=True)
@@ -274,9 +347,6 @@ def adjust_vars(df, adj, val):
         method. Return the adjusted columns
         
         df: (DataFrame) Contains ONLY columns to be adjusted
-        
-        cols: (iterable|str) Names of the columns to adjust. Can be one
-              column name
         
         adj: (str) ['cmip'|'exp'|'lag'] Adjustment type for each 
              column
@@ -291,7 +361,11 @@ def adjust_vars(df, adj, val):
         if adj == 'cmip':
             vars[col] = convolve_impulse(df[col], annual=False)
         elif adj == 'exp':
-            if val < 0.:  # no change, equivalent to doing nothing
+            if val == 'none':
+                vars[col] = df[col].to_numpy()  # simple copy  
+            elif val == 'cmip':
+                vars[col] = convolve_impulse(df[col], annual=False)
+            elif val < 0.:  # no change, equivalent to doing nothing
                 vars[col] = df[col].to_numpy()  # simple copy
             elif val == 0.:  # use the cmip model
                 vars[col] = convolve_impulse(df[col], annual=False)
@@ -381,12 +455,12 @@ def optimize_adjustments(df=None, passes=20):
                     outcome.loc[col, 'lag'] = mi  # best lag
                     outcome.loc[col, 'exp'] = exp # current exp value
                 tests.loc[:] = 9.
-        print(f'\n==== Pass {p} ====\n')
-        print(outcome)
+        print(f'\n==== Pass {p} ====\n{outcome}\n')
         test = outcome.result.sum() - previous.result.sum()
         if abs(test) < .000001:
             break
         previous = outcome.copy()
+    print(f'\n{outcome}\n')
     return outcome
     
 def fit_vars(df=None, adjs=None, annual=False, verbose=False):
@@ -410,9 +484,8 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     # adjust natural influences for best fit
     df = adjust_combined(df, adjs)
     # get trend line
-    rate = 10 * 12
-    xi = np.arange(n)
-    m, b = np.polyfit(xi, df.temp.to_numpy(), 1)
+    rate = 10
+    m, b = np.polyfit(df.Year, df.temp, 1)  # conversion to numpy not needed
     print(f'Original trend was {m*rate:.3}°C/decade')
     sigma = df.flat.std()
     print(f'Original standard deviation was: {sigma:.4f}°C')
@@ -423,43 +496,42 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     df['reduced'] = df.flat - df.vars
     
     # Remove periodic signal from residual
-    f = np.fft.rfft(df.reduced.to_numpy())
-    f = pd.DataFrame(index=np.arange(len(f)), data={'Complex': f})
-    f['Value'] = np.abs(f.Complex)
-    f.Value /= f.Value.max()
-    f['Angle'] = np.angle(f.Complex)
-    if verbose:
-        ax = new_axes('FFT', 
-                      'Amplitude of Frequencies in Residual', 
-                      'Amplitude relative to maximum')
-        ax.set_xlabel(f'Cycles per {n} Months')
-        ax.plot(f.Value)
-        plt.show()
-    print('\nTop 2 residual frequencies:')
-    fm = f.nlargest(2, 'Value')
-    test = fm.Value.mean() / f.Value.mean()
+    ft = fftn(df.reduced, mult=4, verbose=verbose)
+    nf = 2 * len(ft)  # only half the values are returned. They're symmetric.
+    ns = 3  # number of signals to look at
+    fm = ft.nlargest(ns, 'residual')
+    print(f'\nTop {len(fm)} residual frequencies:')
     print(fm)
-    print(f'Peaks over average: {test:.1f}\n')
     
-    if test > 5.:  # remove periodic signals
+    # Check if signal is strong enough to use
+    threshold = 6.  # threshold above which sine signals will be used
+    signal = fm.value.sum()
+    noise = ft.value.sum() - signal
+    signal /= ns
+    noise /= (nf/2 - ns)
+    snr = 10 * np.log10(signal / noise)  # S/N in dB
+    print(f'Signal to Noise Ratio: {snr:.1f} dB')
+    print(f'SNR Threshold is {threshold:.0f} dB\n')
+    
+    if snr > threshold:  # remove periodic signals
         t = np.arange(n)
-        freq = 2. * np.pi / n
+        fr = 2. * np.pi / nf
         for s in fm.index:
             sname = f'Sine{s}'
-            df[sname] = np.sin(freq * s * t - fm.Angle[s])
-        sines = df.columns[-2:]
+            df[sname] = np.cos(fr * s * t + fm.angle[s])
+        sines = df.columns[-ns:]
         c = fit(df.reduced, df[sines])
         df[sines] *= c[:-1]
         df['sine'] = df[sines].sum(axis=1) + c[-1]
         print('Sine coef:', c)
-        print(f'Sine impact is ±{c.sum()/df.vars.std():.3f}σ')
+        print(f'Sine impact is ±{0.707 * abs(c).sum()/df.vars.std():.3f}σ\n')
         df.reduced -= df.sine
         df.vars += df.sine
     
     # calculate true trend line of reduced data
     df['real'] = df.reduced + df.lowess
-    m, b = np.polyfit(xi, df.real.to_numpy(), 1)
-    df['trend'] = m * xi + b
+    m, b = np.polyfit(df.Year, df.real, 1)
+    df['trend'] = m * df.Year + b
     df['detrend'] = df.real - df.trend
 
     nsigma = df.detrend.std()
@@ -473,12 +545,39 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
         df = df.groupby(df.index.year).mean()
     return df  
 
+def test_fft(n, f, mult=True):
+    tau = 2. * np.pi
+    m = n
+    if (type(mult) is bool):
+        if mult:
+            if n %f > 0:
+                m = (n//f + 1) * f
+    elif type(mult) is int:
+        m = mult
+    else: print('`mult` unused due to wrong type')
+    r = tau / n  # rate to get one cycle per data set
+    rm = tau / m
+    t = np.arange(n)
+    s = np.cos(f * r * t)
+    ft = np.fft.rfft(s, m)
+    fr = np.abs(ft).argmax()
+    a = np.angle(ft[fr])
+    sr = np.cos(fr * rm * t + a)
+    print(f'freq:{f}\nrecovered:{fr}\nangle: {a:.4f}\nmult: {m}')
+    fig, axs = plt.subplots(2, 1, num=f'Fig {n}_{f}', clear=True, sharex=True)
+    axs[0].plot(s)
+    axs[0].plot(sr)
+    axs[1].plot(abs(ft))
+    
+    plt.show()
+    
+    
 def get_future(adjs):
     ''' Return a dataframe with 2016 to 2020 residual added to the end.
     '''
     df = fit_vars(adjs=adjs)
     model = df.loc['2016-01-01':'2019-12-01']
-    start = '1980-01-01'
+    start = df.index[0]
     end = '2028-01-01'
     xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
     future = pd.DataFrame(index=xp)
@@ -514,10 +613,13 @@ def new_fig_rows(name, title, ylabel, num=1):
 def plot_one(ax, data, sigma, years=None, labels=None):
     """ Plot one axes given a Pandas Series as data
     """
+    annual = not hasattr(data.index, 'month')
+    a = {True:.5, False:.3}[annual]
     if labels:
         years = None
-    ax.plot(data.index, data.values, 'k+', alpha=.3)
+    ax.plot(data.index, data.values, 'k+', alpha=a)
     ax.axhline(color='k', lw=.5)
+    
     for i in [1, 2]:
         ax.fill_between(data.index, i*sigma, -i*sigma, color='b', alpha=.12)
     labels = label_years(ax, data, sigma, years, labels=labels)
@@ -563,14 +665,71 @@ def label_years(ax, data, sigma, years=None, labels=None):
     
 # %% Plotting Functions
 
+def plotSlope(annual=False):
+    ''' Plot lowess slope
+    '''
+    df = compile_vars(start='1980-01-01')
+    yf1 = df.loc['1980-01-01':'2015-01-01']
+    yf2 = df.loc['1992-04-01':'2015-01-01']
+    yf1.start = 1980
+    yf2.start = 1992
+    if annual:
+        df = df.groupby(df.index.year).mean()
+        df.Year = df.index
+    period = {True: 'annual', False: 'monthly'}[annual]
+    rate = 10
+    ax = new_axes('slope', 
+                  'Locally Weighted Slope of Global Temperature', 
+                  f'{df.spec.name} {period} change from pre-industrial (°C)')
+    ax.plot(df.temp, alpha=.3, label='Temperature')
+    ax.plot(df.lowess, label='Locally Weighted Slope (LOWESS)')
+    m, b = np.polyfit(yf2.Year, yf2.lowess, 1)
+    y = m * df.Year + b
+    ax.plot(y, label='1990 to 2015 Trend')
+    plt.legend()
+    
+    ax = new_axes('slope_compare',
+                  'Slope Estimate Depends on Starting Point',
+                  f'{df.spec.name} {period} change from pre-industrial (°C)')
+    ax.plot(df.temp, alpha=.3, label='Temperature')
+    dashed = (0, (5, 10))
+    for yf, c in zip([yf1, yf2], ['C1', 'C2']):
+        m, b = np.polyfit(yf.Year, yf.temp, 1)
+        x = df.Year.to_numpy()
+        y = m * x + b
+        label = f'{yf.start} to 2015'
+        ax.plot(df.index, y, linestyle=dashed, color=c)
+        x = yf.Year.to_numpy()
+        y = m * x + b
+        ax.plot(yf.index, y, color=c, label=label)
+        ax.text(yf.index[0], y[0], f'{m*rate:.3f}°C per decade', 
+                va='top', size='large')
+    plt.legend()
+        
+    plt.show()
+
 def plotTempTrend(df=None, adjs=None, annual=False):
     """ Plot the monthly temperature trend to 2070
     """
     def get_date(y):
+        xpm = xp.max()
         xpi = int((y - intercept) / slope)
-        if xpi >= len(xp):
-            return xp[-1]
-        return xp[xpi]
+        if xpi >= xpm:
+            return xpm
+        return xpi
+    
+    def get_slope(xs, ys):
+        ''' Return slope and intercept
+        
+            xs and ys are series
+        '''
+        x = xs.to_numpy()
+        y = ys.to_numpy()
+        dx = x[-1] - x[0]
+        dy = y[-1] - y[0]
+        slope = dy/dx
+        intercept = y[0] - slope * x[0]
+        return slope, intercept
         
     # Do analysis
     if df is None:
@@ -585,18 +744,11 @@ def plotTempTrend(df=None, adjs=None, annual=False):
         # trend: linear trend of real
         # detrend: real - trend
     
-    start = df.index[0]
-    if annual:
-        end = 2070
-        xp = np.arange(start, end+1)
-    else:
-        end = '2070-01-01'
-        xp = pd.date_range(start, end, freq='MS', inclusive='left')  # projection
-    x = df.index.values
-    xi = np.arange(len(x))
-    xpi = np.arange(len(xp))  # projection index
-    period = {True: 'Annual', False: 'Monthly'}
-    alpha = {True: .5, False: .3}
+    start = df.index[0].year
+    end = 2070
+    xp = np.arange(start, end+1)  # 
+    period = {True: 'Annual', False: 'Monthly'}[annual]
+    alpha = {True: .5, False: .3}[annual]
     
     def plot(y, yt, ytp, win_name='projection', title_app=''):
         """ Plot values against trend and variance
@@ -605,28 +757,23 @@ def plotTempTrend(df=None, adjs=None, annual=False):
             yt: trend
             ytp: projected trend
         """
-        figname = win_name
-            
         sigma = (y - yt).std()
     
         dates = {1.5:get_date(1.5), 
                  2.0:get_date(2.0)}
         ymin = 0
-        xmin = x[0]
-        slope = (yt[-1] - yt[0]) / len(yt)
-        fig = plt.figure(figname, clear=True)
+        xmin = df.Year.iloc[0]
+        slope, intercept = get_slope(df.Year, yt)
+        fig = plt.figure(win_name, clear=True)
         ax = fig.add_subplot(111)
         ax.set_ylim(ymin, 2.7)
-        ax.plot(x, y, 'k+', alpha=alpha[annual], 
-                label=f'{period[annual]} Temperature') # data
+        ax.plot(df.Year, y, 'k+', alpha=alpha, 
+                label=f'{period} Temperature') # data
         ax.plot(xp, ytp, 'b-', lw=1) # trend
         ax.fill_between(xp, ytp+2*sigma, ytp-2*sigma, color='b', alpha=.12)
         ax.fill_between(xp, ytp+sigma, ytp-sigma, color='b', alpha=.12)
         for k in dates.keys():
-            if annual:
-                year = dates[k]
-            else:
-                year = dates[k].year
+            year = int(dates[k])
             ax.hlines(k, xmin, dates[k], color='k', lw=0.5, ls=':')
             ax.vlines(dates[k], ymin, k, color='k', lw=0.5, ls=':')
             ax.text(dates[k], k, year, ha='right', va='bottom', weight='bold')
@@ -637,10 +784,8 @@ def plotTempTrend(df=None, adjs=None, annual=False):
         text = ("Note: This is a very simplistic projection based only on past trends.\n"+
                 "Natural Influences are El Niño, volcanic activity, and solar.")
         ax.text(1982, 2.2, text, size='large')
-        rate = 10 * ((not annual) * 11 + 1)  # 10 or 120
-        change = 'monthly'
-        if annual:
-            change = 'annual'
+        rate = 10
+        change = {True:'annual', False:'monthly'}[annual]
         ax.text(get_date(1.75), 1.75, f"{slope*rate:.3f}°C/decade", va='top')
         tls.titles(ax, f"Temperature Projection to 2070{title_app}",
                    f"{df.spec.name} {change} change from pre-industrial (°C)")
@@ -651,25 +796,23 @@ def plotTempTrend(df=None, adjs=None, annual=False):
          
     #=== Plot trend compared with natural influences ===
     
-    y = df.temp.values
-    slope, intercept = np.polyfit(xi, y, 1)
-    yt = slope * xi + intercept
-    ytp = slope * xpi + intercept
-    ax = plot(y, yt, ytp, win_name='projection_compare',
+    slope, intercept = np.polyfit(df.Year, df.temp, 1)
+    yt = slope * df.Year + intercept
+    ytp = slope * xp + intercept
+    ax = plot(df.temp, yt, ytp, win_name='projection_compare',
               title_app=', Comparing Natural Influences')
     y = (df.vars + df.lowess).values
-    ax.plot(df.index.values, y, label = 'Natural Influences')
+    ax.plot(df.Year, y, label = 'Natural Influences')
     ax.legend(loc="center left")
     
     #=== Plot Trend with natural influences removed ===
     
-    y = df.real.to_numpy()
-    yt = df.trend.to_numpy()
-    slope = (yt[-1] - yt[0]) / len(yt)
-    intercept = yt[0]
-    ytp = slope * xpi + intercept
-    ax = plot(y, yt, ytp, win_name='projection_reduced',
+    slope, intercept = get_slope(df.Year, df.trend)
+    ytp = slope * xp + intercept
+    ax = plot(df.real, df.trend, ytp, win_name='projection_reduced',
               title_app=', Natural Influences Removed')
+    df['smooth'] = df.real.rolling(12, min_periods=1, center=True).mean()
+    ax.plot(df.Year, df.smooth, color='b', lw=1, label='12-month Average')
     ax.legend(loc="center left")
 
     plt.show()
@@ -683,9 +826,8 @@ def plotTempVar(df=None, adjs=None, annual=False):
         df = compile_vars()
     if not hasattr(df, 'detrend'):
         df = fit_vars(df, adjs=adjs, annual=annual)
-    xi = np.arange(len(df))
-    slope, intercept = np.polyfit(xi, df.temp.to_numpy(), 1)
-    raw_detrend = df.temp - slope * xi - intercept
+    slope, intercept = np.polyfit(df.Year, df.temp, 1)
+    raw_detrend = df.temp - slope * df.Year - intercept
     labels = max_years(raw_detrend)
     p = {True:'Annual', False:'Monthly'}[annual]
     
@@ -698,11 +840,12 @@ def plotTempVar(df=None, adjs=None, annual=False):
     ax = axs[0]
     plot_one(ax, raw_detrend, sigma, labels=labels)
     # plot natural influences over top
-    ax.plot(df.index, df.vars.values, 'r-', lw=1)
+    clr = 'r'
+    ax.plot(df.index, df.vars.values, color=clr, lw=1)
     ax.text(df.index[-1], df.vars.iloc[-1], " Natural\n Influences",
-            color='r', size='small', va='center', weight='bold')
-    unit = {True: 10, False: 120}[annual]
-    text = f' Trend:\n {slope*unit:.4f}°C/decade\n σ = {sigma:.3f}°C'
+            color=clr, size='small', va='center', weight='bold')
+    rate = 10  # per decade
+    text = f' Trend:\n {slope*rate:.3f}°C/decade\n σ = {sigma:.3f}°C'
     ax.text(df.index[-1], -.01, text, size='small', va='top')
     ylim = ax.get_ylim()
     text = 'Natural influences are El Niño Indexes, Volcanic particles, and Solar'
@@ -710,15 +853,23 @@ def plotTempVar(df=None, adjs=None, annual=False):
             color='r', size='small')
     # plot reduced data in next axes
     ax = axs[1]
+    clr = 'b'
     nsigma = df.detrend.std()
+    df['smooth'] = df.detrend.rolling(12, min_periods=1, center=True).mean()
     plot_one(ax, df.detrend, nsigma, labels=labels)
+    ax.plot(df.smooth, color=clr, lw=1)
     ax.set_ylim(ylim)
+    
     ax.text(df.index[0], 2.1*nsigma, "Natural Influences Removed",
             color='k', weight='bold')
-    slope = (df.trend.iloc[-1] - df.trend.iloc[0])/len(df)
-    text = f' Trend:\n {slope*unit:.4f}°C/decade\n σ = {nsigma:.3f}°C'
+    dy = df.trend.iloc[-1] - df.trend.iloc[0]
+    dx = df.Year.iloc[-1] - df.Year.iloc[0]
+    slope = dy/dx
+    text = f' Trend:\n {slope*rate:.3f}°C/decade\n σ = {nsigma:.3f}°C'
     ax.text(df.index[-1], -.01, text,
             size='small', va='top')
+    ax.text(df.index[-1], nsigma, '12-Month \nAverage', color=clr,
+            va='center', size='small', weight='bold')
    
     plt.show()
     return
@@ -751,6 +902,7 @@ def plotInfluences(df=None, adjs=None, annual=False):
     df = fit_vars(df, adjs=adjs, annual=annual)
     e_cols = 'N12 N3 N4 N34'.split()
     cols = 'vol solar enso sine'.split()
+    rcols = cols[:-1]  # 'sine' isn't adjusted
     name = 'All Volcanic Solar ENSO Sine'.split()
     if 'sine' not in df.columns:
         cols.remove('sine')
@@ -768,9 +920,9 @@ def plotInfluences(df=None, adjs=None, annual=False):
     for c in e_cols:
         raw[c] *= scale(raw[c], df[c])
     raw['enso'] = raw[e_cols].sum(axis=1)
-    for c in cols:
+    for c in rcols:
         raw[c] *= scale(raw[c], df[c])
-    raw['vars'] = raw[cols].sum(axis=1)
+    raw['vars'] = raw[rcols].sum(axis=1)
     
     # plot major influences
     axs = new_fig_rows('Influences', 
@@ -780,7 +932,8 @@ def plotInfluences(df=None, adjs=None, annual=False):
     for i, c in enumerate(['vars']+cols):
         ax = axs[i]
         ax.plot(df[c])
-        ax.plot(raw[c], alpha=0.3)
+        if c in raw.columns:
+            ax.plot(raw[c], alpha=0.3)
         ax.set_ylim((-.35, .35))
         ax.text(.1, .2, name[i], transform=ax.transAxes, 
                 weight='bold')
@@ -907,20 +1060,22 @@ def plotOceanWarming():
         
 def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
              verbose=False):
-    """ Plot charts determining the global temperature warming rate since 1980
-        and see if there is any statistically relevant acceleration.
+    """ Plot charts determining the global temperature warming rate within
+        the dataset to see if there is any statistically relevant acceleration.
         
         verbose: (Bool) If True, prints extra charts for blog
     """
     if df is None:
         df = compile_vars()
-    if adjs is None:
-        reduced = False
+        
     if hasattr(df, 'detrend'):  # check if natural influences removed
         reduced = True
+    elif adjs is None:
+        reduced = False
     else:
         df = fit_vars(df, adjs)
         reduced = True
+        
     if annual:
         df = df.groupby(df.index.year).mean()
         df[yn] = df.index
@@ -1045,7 +1200,7 @@ def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
     print(stats.loc[imin])
 
     plt.show()
-    return stats
+    return
         
 def plotBreak(point, df=None, adjs=None, annual=False, stdDevs=2.):
     ''' Plot the slopes before and after a supplied break point. The point
@@ -1093,7 +1248,7 @@ def plotBreak(point, df=None, adjs=None, annual=False, stdDevs=2.):
         ax.plot(x, y, '-', color=c, lw=2, label=label)
         err = lsq.sigma * stdDevs * unit
         ax.fill_between(x, y-err, y+err, color=c, alpha=0.15)
-    tr.analyzeRate(df, dn, window=20, stdDevs=stdDevs)
+    tr.analyzeRate(df, dn, window=30, stdDevs=stdDevs)
     x = df.Year.to_numpy()
     y = df.Rate.to_numpy() * unit
     ax.plot(x, y, 'k-', lw=1, label='Rate with 20-year window')
@@ -1121,10 +1276,16 @@ def plotBreak(point, df=None, adjs=None, annual=False, stdDevs=2.):
     c = chow(lsq.res, md[0].res, md[1].res, 2)
     hyp = {True:'Pass above', False:'Fail below'}[(c.p > 0.05)]
     text = ('Chow test for no break: \n' +
-            f'Test: {c.Chow:0.1f} (DF₁: {c.DoF1:.0f}, DF₂: {c.DoF2:.0f}\n' +
+            f'Test: {c.Chow:0.1f} (DF₁: {c.DoF1:.0f}, DF₂: {c.DoF2:.0f})\n' +
             f'p-value: {c.p:0.3f} ({hyp} 0.05 threshold)')
     ax.text(.2, .7, text, transform=ax.transAxes,
             ha='left')
 
     plt.show()
+    
+def plotNoCooling(adjs):
+    df = fit_vars(adjs=adjs)
+    df = df.loc[(df.index.year<2011)|(df.index.year>2014)]
+    
+    
 
