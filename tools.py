@@ -13,9 +13,10 @@ import datetime as dt
 import numpy as np
 from scipy.interpolate import UnivariateSpline as Spline
 
-byTxt = 'ottawa.place/@dan613 ©CC-BY 4.0'
+# byTxt = 'ottawa.place/@dan613 ©CC-BY 4.0'
+byTxt = 'http://dmn613.wordpress.com ©CC-BY 4.0'
 logo = None
-logo = 'Mastodon_icon.png'
+# logo = 'Mastodon_icon.png'
 
 yn, mn, dn, en, nn, sn = ['Year', 'Month', 'Data',
                           'Error', 'Normalized', 'Smooth']
@@ -56,7 +57,7 @@ def byline(ax: plt.axes, x=0.01, y=0.01,
         return txt
     
     # show logo in front of text
-    plt.Figure.draw_without_rendering(ax.figure)  # required to get extents
+    ax.figure.draw_without_rendering()  # required to get extents
     tbox = txt.get_window_extent()
     h = tbox.height
     x = tbox.bounds[0]
@@ -160,6 +161,16 @@ def addColor(ax, c):
     ax.yaxis.label.set_color(c)
     
 #%% Data tools
+
+def date_to_year(x):
+    """
+    Convert an index of dates to fractional years
+    
+    x: array or index of dates
+    """
+    if not hasattr(x, 'year'):
+        return x
+    
 
 def gaussian(n=50, lim=3):
     """ Gaussian window, with endpoints near 0.
