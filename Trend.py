@@ -208,12 +208,21 @@ def selectData(data, cn=None, start=None, end=None):
     d = data.loc[data['Year'].between(start, end)]
     return d['Year'], d[cn]
 
-def linearFit(x, y):
+def linearFit(x, y, knot=None):
     """ Determines the linear fit to supplied Numpy arrays. Use
-        `df['Column Name'].values` to extract array from DataFrame.
+        `df['Column Name'].to_numpy()` to extract array from DataFrame.
         Returns dictionary of results.
-        xdata, ydata: (numpy array) Input x and y data
+        
+        x, y: (numpy array) Input x and y data
+        knot: (float, float) Starting point for a continuous fit
     """
+    # Equation format is y = a + bx
+    adjusted = False
+    if hasattr(knot, 'index') and (len(knot)==2):
+        # Move data to be relative to the knot
+        x -= knot[0]
+        y -= knot[1]
+        adjusted = True
     # accumulate sums
     n = len(x)
     sx = x.mean()
@@ -221,10 +230,22 @@ def linearFit(x, y):
     sxx = (x*x).mean()
     sxy = (x*y).mean()
     # trend
-    if sxx > sx*sx:
+    if adjusted:
+        b = sxy / sxx
+    elif sxx > sx*sx:
         b = (sxy - sx*sy)/(sxx - sx*sx)
     else: b=0
-    a = sy - b*sx
+    if adjusted:
+        a = knot[1] - b * knot[0]
+        # Redo stats using original data
+        x += knot[0]
+        y += knot[1]
+        sx = x.mean()
+        sy = y.mean()
+        sxx = (x*x).mean()
+        sxy = (x*y).mean()
+    else:
+        a = sy - b*sx
     # uncertainty
     sd2 = ((y - (a+b*x))**2).sum()/(n - 2)  # residual variance
     sb2 = sd2/(n*(sxx-sx*sx))  # slope variance
@@ -316,23 +337,28 @@ def confidenceInterval(xdata, ydata, stdDevs, lsq=None):
     lsq.y2 = y + dy
     return lsq
 
-def analyzeData(xdata, ydata, stdDevs=2.):
+def analyzeData(xdata, ydata, stdDevs=2., decorrelated=False, knot=None):
     """ Get the trend of the supplied data, along with the confidence
         interval at the supplied number of standard deviations.
         xdata, ydata: (numpy array) data to be analyzed
         stdDevs:      (float) Number of standard deviations for confidence
                       interval. Default is 2.0 (95%).
+        decorrelated: (Bool) True if autocorrelation removed.
+        knot:         (float, float) Starting (x,y) value if a continuous
+                      fit.
         Returns lsq with analysis values and confidence limits y1, y2
     """
     if hasattr(xdata, 'values'): x = xdata.values
     else: x = xdata
     if hasattr(ydata, 'values'): y = ydata.values
     else: y = ydata
-    lsq = linearFit(x, y)
-    nu = dataPerDegreeOfFreedom(x, y, lsq)
-    nu_adj = max(1., nu)
-    lsq.sigma = (nu_adj * lsq.slopeVar)**0.5
-    lsq.nu = nu
+    lsq = linearFit(x, y, knot)
+    nu_adj = 1.
+    if not decorrelated:
+        nu = dataPerDegreeOfFreedom(x, y, lsq)
+        nu_adj = max(1., nu)
+        lsq.sigma = (nu_adj * lsq.slopeVar)**0.5
+        lsq.nu = nu
     lsq = confidenceInterval(x, y, stdDevs * nu_adj, lsq)
     return lsq
 
