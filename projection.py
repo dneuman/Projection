@@ -5,7 +5,7 @@ Created on Wed Jan 29 20:17:30 2020
 
 @author: dan
 """
-
+# %% Setup
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -15,6 +15,11 @@ import Trend as tr
 import datetime as dt
 import xarray as xr
 import scipy.stats as stats
+import statsmodels.api as sm
+from statsmodels.graphics.tsaplots import plot_pacf, plot_acf
+from statsmodels.stats.diagnostic import acorr_ljungbox
+import pymc as pm
+import arviz as az
 
 dst = ds.dst  # Data Store, an object that loads and stores data in a common format
 plt.style.use('clean')
@@ -26,45 +31,56 @@ yn, mn, dn, en, sn = ['Year', 'Month', 'Data', 'Error', 'Smooth']
 
 # %% Data Tools
 
-def get_impulse(n: int, annual: bool=True):
-    """ Return annual (default) or monthly warming curve based on 
-        Caldeira and Myhrvold 2013, Using 3 exponent model with mean values
-        th0     th1     th2     ta0     ta1     ta2
-        .226    .354    .409    .586    7.15    273.7
+def get_step(n: int, annual: bool=True):
+    """ Return annual (default) or monthly warming curve due to an energy
+        change based on Caldeira and Myhrvold 2013, Using 3 exponent model 
+        with median values:
+        
+        th0    th1    th2    ta0    ta1    ta2
+        .226   .354   .409   .586   7.15   237.7
+        
+        The `ta` values give the time frame for a 3-box model (land, upper 
+        and lower ocean).
+        
+        Parameters
+        ----------
+        
+        n: int
+            Number of years of step change values
+            
+        annual: bool
+            (Default True) True if annual, False if monthly
     """
     # f(t) = 1 - (th0 e^-t/ta0 + th1 e^-t/ta1 + th2 e^t/ta2)
-    def f(x, th, ta):
-        t = x + 1.  # advance along the curve a bit for current year
-        v = (th[0] * np.exp(-t / ta[0]) +
-              th[1] * np.exp(-t / ta[1]) +
-              th[2] * np.exp(-t / ta[2])).clip(0., 1.)
-        return 1. - v
+    th = np.array([.226, .354, .409 ])  # median values
+    ta = np.array([.586, 7.15, 237.7])
+    period = {True: 1, False: 1/12}[annual]
+    t = np.arange(0, n*period, period)
+    ones = np.ones((len(th), len(t)))
+    a = (ones * t).T / ta
+    y = (th * np.exp(-a)).sum(axis=1)
+    y = 1. - y.clip(0., 1.)
+    return pd.Series(y, t, name='Step')
 
-    th = np.array([.238, .345, .416])  # mean values
-    ta = np.array([.655, 9.46, 257.1])
-    #    th = np.array([.226, .354, .409 ])  # median values
-    #    ta = np.array([.586, 7.15, 273.7])
-    if annual:
-        p = 1
-    else:
-        p = 1/12
-    x = np.arange(0, n*p, p)
-    impulse = pd.DataFrame(index=x)
-    impulse[dn] = f(x, th, ta)
-    return impulse
-
-def get_simple_impulse(n: int, r: float)->float:
-    ''' Return a function that approaches 1 over time.
-    
-        r: (float) Rate of growth. Larger is slower.
+def get_simple_step(n: int, r: float)->pd.Series:
+    ''' Return a function that approaches 1 over time in response to a step
+        change in energy.
+        
+        Parameters
+        ----------
+        
+        n: int
+            Number of values
+            
+        r: float 
+            Period of growth. Larger is slower.
     '''
-    x = np.arange(1, n+1)
-    df = pd.DataFrame(index=(x-1))
-    df[dn] = 1. - np.exp(-x/r)
-    return df
+    t = np.arange(n)
+    y = 1. - np.exp(-t/r)
+    return pd.Series(y, t, name='Step')
 
-def convolve_impulse(data: pd.Series, 
-                     impulse: pd.DataFrame=None, 
+def convolve_step(data: pd.Series, 
+                     step: pd.Series=None, 
                      annual: bool=True):
     """ Convolve data with forcing impulse.
         Assumes impulse has +/- values as well.
@@ -73,19 +89,120 @@ def convolve_impulse(data: pd.Series,
         impulse: DataFrame
         monthly: boolean  True if monthly data present, default False
     """
-    if impulse is None:
-        impulse = get_impulse(len(data), annual=annual)
+    if step is None:
+        step = get_step(len(data), annual=annual)
     n = len(data)
     kernel = np.zeros(2 * n - 1)
     change = data.copy()
     # have to assume the year before data starts is 0,
     # otherwise mean shifts
     change.iloc[1:] -= data.iloc[:-1].values
-    kernel[-n:] = impulse[dn].values
+    kernel[-n:] = step.values
     c = np.convolve(change.values, kernel, 'valid')
     result = pd.Series(index=data.index,
                        data=c[0:n])
     return result
+
+def autocorr(data: pd.Series, N: int):
+    '''
+    Return the autocorrelation of the data for the first N+1 lags 
+
+    Parameters
+    ----------
+    data : pd.Series
+        data for the autocorrelation
+    N : int
+        Number of lags after 0 to calculate.
+
+    Returns
+    -------
+    pd.Series of autocorrelations with lags as index.
+    '''
+    ac = pd.Series(index=np.arange(N+1))
+    ac.index.name = 'Lags'
+    name = 'Data'
+    if hasattr(data, 'name'):
+        name = data.name
+    ac.name = f'Autocorrelation of {name}'
+    for i in ac.index:
+        ac[i] = data.autocorr(i)
+    return ac
+
+def test_stationarity(obs):
+    """
+    Test for stationarity using both the Augmented Dickey-Fuller 
+    and KPSS tests
+    
+    Parameters
+    ----------
+    
+    obs : array-like
+        Data to test
+    """
+    
+    from statsmodels.tsa.stattools import adfuller
+    from statsmodels.tsa.stattools import kpss
+    
+    print("\nResults of Dickey-Fuller Test:")
+    print('Hypothesis: roots on unit circle (stationary)')
+    dftest = adfuller(obs, autolag="AIC")
+    dfoutput = pd.Series(
+        dftest[0:4],
+        index=[
+            "Test Statistic",
+            "p-value",
+            "#Lags Used",
+            "Number of Observations Used",
+        ],
+    )
+    for key, value in dftest[4].items():
+        dfoutput["Critical Value (%s)" % key] = value
+    print(dfoutput)
+    
+    print("\nResults of KPSS Test:")
+    print("Hypothesis: series is trend stationary")
+    kpsstest = kpss(obs, regression="c", nlags="auto")
+    kpss_output = pd.Series(
+        kpsstest[0:3], index=["Test Statistic", "p-value", "Lags Used"]
+    )
+    for key, value in kpsstest[3].items():
+        kpss_output["Critical Value (%s)" % key] = value
+    print(kpss_output)
+    
+    if dfoutput['p-value'] < 0.05:
+        print('\n Roots not on unit circle (possibly non-stationary)')
+    if kpss_output['p-value'] < 0.05:
+        print('\n Series is not trend stationary')
+
+
+def chow(res, res1, res2, k, p=0.05):
+    ''' Return the result of the Chow f-statistic test to determine
+        the likelihood that the residuals of a model of two sets
+        of data can be better explained by the model of the combined
+        data.
+        
+        res : (array-like) Residuals of the combined data
+        
+        res1, res2 : (array-like) Residuals of the two portions of
+                     data each modeled separately.
+                    
+        k : (int) Number of parameters in the model
+    '''
+    lb = acorr_ljungbox(res, 24, k)
+    lag = lb.lb_pvalue.idxmax()
+    if lb.lb_pvalue[lag] < p:
+        print('\nWARNING: Residual is autocorrelated and the Chow test ' + \
+              'is unsuited.\n')
+    
+    Dn = k
+    Dd = len(res1) + len(res2) - 2*k
+    S = (res * res).sum()
+    S12 = (res1 * res1).sum() + (res2 * res2).sum()
+    C = ((S - S12)/Dn) / (S12 / Dd)
+    p = stats.f.sf(C, Dn, Dd)
+    r = pd.Series([C, p, Dn, Dd], 
+                  index=['Chow', 'p', 'DoF1', 'DoF2'])
+    return r
 
 def fit(data, vars):
     ''' Fit a set of variables to data
@@ -146,7 +263,8 @@ def calc_volcano(end=None, annual=False):
     # Get aerosol data from the GloSSAC satellite instrument data set
     # This is in NetCDF format and requires a free account to access
     # Source: https://asdc.larc.nasa.gov/project/GloSSAC
-    url = 'Data/GloSSAC_V2.21.nc'
+    # A new version is available at the end of each year.
+    url = 'Data/GloSSAC_V2.22.nc'
     gl = xr.open_dataset(url)
     aod = gl.Glossac_Aerosol_Optical_Depth[:,:,2]  # 525 nm
     # time index is integers in the form yyyymm
@@ -222,29 +340,6 @@ def calc_volcano(end=None, annual=False):
         vol = vol.groupby(vol.index.year).mean()
     return vol
 
-def chow(res, res1, res2, k):
-    ''' Return the result of the Chow f-statistic test to determine
-        the likelihood that the residuals of a model of two sets
-        of data can be better explained by the model of the combined
-        data.
-        
-        res: (array-like) Residuals of the combined data
-        
-        res1, res2: (array-like) Residuals of the two portions of
-                    data each modeled separately.
-                    
-        k: (int) Number of parameters in the model
-    '''
-    Dn = k
-    Dd = len(res1) + len(res2) - 2*k
-    S = (res * res).sum()
-    S12 = (res1 * res1).sum() + (res2 * res2).sum()
-    C = ((S - S12)/Dn) / (S12 / Dd)
-    p = stats.f.sf(C, Dn, Dd)
-    r = pd.Series([C, p, Dn, Dd], 
-                  index=['Chow', 'p', 'DoF1', 'DoF2'])
-    return r
-
 def fft(ds, mult=None):
     ''' 
     Return a DataFrame with the fft of the supplied residual series
@@ -314,6 +409,18 @@ def fftn(ds, mult=None, verbose=False):
         plt.show()
     return ft
 
+def var2lag(vars):
+    '''
+    Turn a series of model variables into an array of lags
+    '''
+    p = vars.copy()
+    if 'sigma2' in p.index:
+        p.drop('sigma2', inplace=True)
+    if 'ma.L1' in p.index:
+        p.drop('ma.L1', inplace=True)
+    ix = list(p.index.str.split('L'))
+    lags = np.array(ix)[:,1].astype(int)
+    return lags
 
 # %% Data Processing
 
@@ -325,6 +432,7 @@ def compile_vars(source='hadcrut', start='1990-01-01'):
     end = temp.index[-1]
     start = pd.to_datetime(start) # Start year for analysis
     df = pd.DataFrame(index=temp.loc[start:end].index)
+    df.index.name = source
     df.spec = ''  # avoid warning for setting columns
     df.spec = temp.spec
     tr.convertYear(df)  # add a fractional year column for calculations
@@ -359,19 +467,19 @@ def adjust_vars(df, adj, val):
     vars[cols] = 0.0
     for i, col in enumerate(cols):
         if adj == 'cmip':
-            vars[col] = convolve_impulse(df[col], annual=False)
+            vars[col] = convolve_step(df[col], annual=False)
         elif adj == 'exp':
             if val == 'none':
                 vars[col] = df[col].to_numpy()  # simple copy  
             elif val == 'cmip':
-                vars[col] = convolve_impulse(df[col], annual=False)
+                vars[col] = convolve_step(df[col], annual=False)
             elif val < 0.:  # no change, equivalent to doing nothing
                 vars[col] = df[col].to_numpy()  # simple copy
             elif val == 0.:  # use the cmip model
-                vars[col] = convolve_impulse(df[col], annual=False)
+                vars[col] = convolve_step(df[col], annual=False)
             else:
-                impulse = get_simple_impulse(n, val)
-                vars[col] = convolve_impulse(df[col], impulse, annual=True)
+                step = get_simple_step(n, val)
+                vars[col] = convolve_step(df[col], step)
         elif adj == 'lag':
             val = int(val)
             vars.iloc[val:, i] = df[col].iloc[:n-val]
@@ -489,13 +597,28 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     print(f'Original trend was {m*rate:.3}°C/decade')
     sigma = df.flat.std()
     print(f'Original standard deviation was: {sigma:.4f}°C')
-    c = fit(df.flat, df[influences])
+    c = fit(df.flat, df[influences])  # Simultaneous Least Squares Fit
     df[influences] *= c[:-1]
     df['enso'] = df[cols['enso']].sum(axis=1)
     df['vars'] = df[influences].sum(axis=1) + c[-1]  # all variables with offset
     df['reduced'] = df.flat - df.vars
     
-    # Remove periodic signal from residual
+    # Remove annual and biennual signals
+    names = []
+    idx = np.arange(len(df))
+    tau = 2. * np.pi
+    for per in [6, 12, 24]:
+        for sig, f in zip(['Cos', 'Sin'], [np.cos, np.sin]):
+            name = f'{sig}{per}'
+            names.append(name)
+            df[name] = f(tau * idx/per)
+    c = fit(df.reduced, df[names])
+    df[names] *= c[:-1]
+    df['seasonal'] = df[names].sum(axis=1) + c[-1]
+    df.vars += df.seasonal
+    df.reduced -= df.seasonal
+
+    # Remove other periodic signals from residual
     ft = fftn(df.reduced, mult=4, verbose=verbose)
     nf = 2 * len(ft)  # only half the values are returned. They're symmetric.
     ns = 3  # number of signals to look at
@@ -531,6 +654,8 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     # calculate true trend line of reduced data
     df['real'] = df.reduced + df.lowess
     m, b = np.polyfit(df.Year, df.real, 1)
+    df.fit = ''
+    df.fit = {'slope':m, 'intercept':b}
     df['trend'] = m * df.Year + b
     df['detrend'] = df.real - df.trend
 
@@ -544,33 +669,6 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     if annual:
         df = df.groupby(df.index.year).mean()
     return df  
-
-def test_fft(n, f, mult=True):
-    tau = 2. * np.pi
-    m = n
-    if (type(mult) is bool):
-        if mult:
-            if n %f > 0:
-                m = (n//f + 1) * f
-    elif type(mult) is int:
-        m = mult
-    else: print('`mult` unused due to wrong type')
-    r = tau / n  # rate to get one cycle per data set
-    rm = tau / m
-    t = np.arange(n)
-    s = np.cos(f * r * t)
-    ft = np.fft.rfft(s, m)
-    fr = np.abs(ft).argmax()
-    a = np.angle(ft[fr])
-    sr = np.cos(fr * rm * t + a)
-    print(f'freq:{f}\nrecovered:{fr}\nangle: {a:.4f}\nmult: {m}')
-    fig, axs = plt.subplots(2, 1, num=f'Fig {n}_{f}', clear=True, sharex=True)
-    axs[0].plot(s)
-    axs[0].plot(sr)
-    axs[1].plot(abs(ft))
-    
-    plt.show()
-    
     
 def get_future(adjs):
     ''' Return a dataframe with 2016 to 2020 residual added to the end.
@@ -593,21 +691,225 @@ def get_future(adjs):
     future.spec = df.spec
     return future
     
-
+def get_AR(data, N, full=False):
+    '''
+    Determine model parameters for an AR(N) model given residual data. Based on 
+    https://www.pymc.io/projects/examples/en/latest/time_series/AR.html
     
+    Parameters
+    ----------
+    data : pandas.Series
+        Data to model. Should be stationary.
+    N : int | list
+        Number of lag parameters to return or a list of specific lag parameters
+        to return.
+    full : bool (default False)
+        If True returns entire model output as an xarray. Otherwise
+        returns a dataframe with means and stds.
+
+    Returns
+    -------
+    pandas.DataFrame of parameters.
+    xarray if full==True
+    '''
+    def get_rho(xf):
+        dims = ['draw','chain']
+        sigma = xf.posterior.sigma.mean().to_numpy()
+        p = xf.posterior.drop_vars('sigma')
+        if len(p.data_vars)==1:  # single variable                
+            df = p.rho.mean(dims).to_dataframe('mu')
+            df['sigma'] = p.rho.std(dims).to_series()
+        else:
+            mu = p.mean(dims).to_pandas()
+            ix = list(mu.index.str.split('_'))
+            ixa = np.array(ix)[:,1].astype(int) + 1
+            df = pd.DataFrame(index=ixa, data=mu.values, columns=['mu'])
+            df['sigma'] = p.std(dims).to_pandas().values
+            lstr = np.array(['ar.L'] * len(df))
+            df['sm'] = lstr + df.index.astype(str)
+        df.index.name = 'lags'
+        df.in_sigma = float(sigma)
+        df._metadata.extend('in_sigma')  # enforce copying
+        
+        return df
+    
+    # Using the pyMC bayesian modelling language to estimate values.
+    # See https://www.pymc.io/projects/examples/en/latest/time_series/AR.html
+    # for a complete explanation.
+    with pm.Model() as model:
+        rho = pm.Uniform('rho', -.5, .5, shape=N)
+        sigma = pm.HalfNormal('sigma', .1)
+        likelihood = pm.AR('y', observed=data,
+                           rho=rho, sigma=sigma, constant=False,
+                           init_dist=pm.Normal.dist(0, 10))
+        idata = pm.sample(1000, tune=2000)
+    
+    df = get_rho(idata)
+    thresh = df.sigma.std()
+    az.plot_trace(idata, combined=True, 
+                  lines=[('rho', {},(-thresh, thresh))])
+    if full:
+        return idata
+        
+    # Try the model again but limit the parameters found
+    lags = df.loc[np.abs(df.mu)>=df.sigma].index
+    while len(df) != len(lags):  # some lags were dropped
+        rho = [0] * N
+        with pm.Model() as model:
+            for i in lags:
+                rho[i] = pm.Uniform(f'rho_{i}', -.5, .5)
+            sigma = pm.HalfNormal('sigma', .1)
+            likelihood = pm.AR('y', observed=data,
+                               rho=rho, sigma=sigma, constant=False,
+                               init_dist=pm.Normal.dist(0, 10))
+            idata = pm.sample(1000, tune=2000)
+        df = get_rho(idata)
+        lags = df.loc[np.abs(df.mu)>=df.sigma].index
+        print(f'\n{df}\n')
+        
+    return df
+
+def get_ARIMA(s, N, use_diff=True):
+    '''
+    Return the parameters of the ARIMA model given data and number of lags
+    to look at. These lags are calculated by creating a model with all possible
+    lags, then dropping lags with low significance until none can be dropped.
+
+    Parameters
+    ----------
+    s : pd.Series
+        Data to model.
+    N : int
+        Number of lags to look at.
+    use_diff : bool, optional
+        If True, use a difference model to ensure stationarity of the data. 
+        The default is True.
+
+    Returns
+    -------
+    res : TYPE
+        Details of the ARIMA model.
+
+    '''
+    
+    # Change index to a date range with a monthly start frequency. This
+    # isn't strictly necessary, but it removes an annoying warning.
+    obs = pd.Series(index=pd.date_range(s.index[0], s.index[-1], freq='MS'))
+    obs[s.index] = s  # missing data will be NaN
+    d, m = (1, 1) if use_diff else (0, 0)
+    fixed = {'ma.L1': -1}
+    last = 0
+    lags = np.arange(N) + 1
+    while last != len(lags):
+        last = len(lags)
+        model = sm.tsa.arima.ARIMA(obs, order=(lags, d, m), dates=obs.index,
+                                   freq='MS', enforce_invertibility=False)
+        fixed['ma.L1'] = -1.
+        dropping = ['ma.L1', 'sigma2']
+        if not use_diff:
+            fixed = {}
+            dropping = ['sigma2']
+        with model.fix_params(fixed):
+            res = model.fit()
+        par = res.params
+        sigma = par.sigma2**.5
+        par.drop(index=dropping, inplace=True)
+        # Only keep parameters that are statistically different than 0
+        keep = par[np.abs(par)>(sigma*.85)]
+        lags = var2lag(keep)
+        print(f'\n{keep}')
+        
+    return res
+
+def AR_process(input, params):
+    '''
+    Run the input through an autoregression process. 
+    
+    Paramters
+    ---------
+    input : array-like
+        values that will have the AR process applied to them.
+    
+    params : pd.Series
+        result parameters from a statsmodel model fit.
+    '''
+    if type(input) == pd.Series:
+        series = True
+        x = input.to_numpy()
+    else:
+        x = input
+        series = False
+    p = params.copy()
+    if 'sigma2' in p.index:
+        p.drop('sigma2', inplace=True)
+    lags = var2lag(p)
+    p = p.to_numpy()
+    k = lags.max()
+    y = np.zeros(len(x)+k)
+    for i in range(k, len(y)):
+        y[i] = y[i - lags] @ p + x[i-k]  # matrix multiply
+    if series:
+        return pd.Series(data=y[k:], index=input.index)
+    else:
+        return y[k:]
+    
+def decorrelate(input, params):
+    '''
+    Run the input through an inverse autoregression process. 
+    
+    Paramters
+    ---------
+    input : array-like
+        values that will have the AR process applied to them.
+    
+    params : pd.Series
+        result parameters from a statsmodel model fit.
+    '''
+    if type(input) == pd.Series:
+        series = True
+        x = input.to_numpy()
+    else:
+        x = input
+        series = False
+    p = params.copy()
+    if 'sigma2' in p.index:
+        p.drop('sigma2', inplace=True)
+    lags = var2lag(p)
+    k = max(lags)
+    dparams = np.zeros(k+1)
+    dparams[0] = 1.
+    dparams[lags] = -p
+    r = np.convolve(x, dparams)
+    if series:
+        return pd.Series(r[:len(x)], input.index)
+    else:
+        return r[:len(x)]
+
 # %% Plotting helpers
 
 def new_axes(name, title, ylabel):
     fig, ax = plt.subplots(1, 1, num=name, clear=True)
     tls.byline(ax)
     tls.titles(ax, title, ylabel)
+    ax.axhline(color='k', alpha=.15)
     return ax
 
-def new_fig_rows(name, title, ylabel, num=1):
+def new_fig_rows(name, title, ylabel, num=2, labels=None, alternate=True):
     fig, axs = plt.subplots(num, 1, num=name, clear=True, sharex=True)
     fig.subplots_adjust(hspace=0)
     tls.byline(axs[-1])
     tls.titles(axs[0], title, ylabel)
+    if alternate:
+        for i in range(1, len(axs), 2):
+            axs[i].tick_params('y', labelright=True, labelleft=False,
+                               right=True, left=False)
+    if labels:
+        for i in range(len(labels)):
+            axs[i].text(0.01, 0.97, labels[i], weight='bold', va='top',
+                        transform=axs[i].transAxes)
+    for ax in axs:
+        ax.axhline(color='k', alpha=.15)
+            
     return axs
 
 def plot_one(ax, data, sigma, years=None, labels=None):
@@ -666,7 +968,7 @@ def label_years(ax, data, sigma, years=None, labels=None):
 # %% Plotting Functions
 
 def plotSlope(annual=False):
-    ''' Plot lowess slope
+    ''' Plot lowess slope showing change because of starting point
     '''
     df = compile_vars(start='1980-01-01')
     yf1 = df.loc['1980-01-01':'2015-01-01']
@@ -708,8 +1010,8 @@ def plotSlope(annual=False):
         
     plt.show()
 
-def plotTempTrend(df=None, adjs=None, annual=False):
-    """ Plot the monthly temperature trend to 2070
+def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
+    """ Plot the monthly temperature trend to 2065
     """
     def get_date(y):
         xpm = xp.max()
@@ -745,10 +1047,10 @@ def plotTempTrend(df=None, adjs=None, annual=False):
         # detrend: real - trend
     
     start = df.index[0].year
-    end = 2070
+    end = 2065
     xp = np.arange(start, end+1)  # 
-    period = {True: 'Annual', False: 'Monthly'}[annual]
-    alpha = {True: .5, False: .3}[annual]
+    period = 'annual' if annual else 'Monthly'
+    alpha = .5 if annual else .3
     
     def plot(y, yt, ytp, win_name='projection', title_app=''):
         """ Plot values against trend and variance
@@ -783,23 +1085,26 @@ def plotTempTrend(df=None, adjs=None, annual=False):
         ax.text(xp[-1], ytp[-1], f'σ = {sigma:.3f}°C', va='top')
         text = ("Note: This is a very simplistic projection based only on past trends.\n"+
                 "Natural Influences are El Niño, volcanic activity, and solar.")
-        ax.text(1982, 2.2, text, size='large')
+        ax.text(start, 2.2, text, size='large', ha='left')
         rate = 10
         change = {True:'annual', False:'monthly'}[annual]
         ax.text(get_date(1.75), 1.75, f"{slope*rate:.3f}°C/decade", va='top')
-        tls.titles(ax, f"Temperature Projection to 2070{title_app}",
-                   f"{df.spec.name} {change} change from pre-industrial (°C)")
+        subtitle = f"{df.spec.name} {change} change from pre-industrial (°C)"
+        tls.titles(ax, f"Temperature Projection to {end}",
+                   f"{subtitle}{title_app}")
         tls.byline(ax)
         plt.show()
         
         return ax
+
+    tname = f'_{df.index.name}'
          
     #=== Plot trend compared with natural influences ===
     
     slope, intercept = np.polyfit(df.Year, df.temp, 1)
     yt = slope * df.Year + intercept
     ytp = slope * xp + intercept
-    ax = plot(df.temp, yt, ytp, win_name='projection_compare',
+    ax = plot(df.temp, yt, ytp, win_name='projection_compare'+tname,
               title_app=', Comparing Natural Influences')
     y = (df.vars + df.lowess).values
     ax.plot(df.Year, y, label = 'Natural Influences')
@@ -809,9 +1114,15 @@ def plotTempTrend(df=None, adjs=None, annual=False):
     
     slope, intercept = get_slope(df.Year, df.trend)
     ytp = slope * xp + intercept
-    ax = plot(df.real, df.trend, ytp, win_name='projection_reduced',
-              title_app=', Natural Influences Removed')
-    df['smooth'] = df.real.rolling(12, min_periods=1, center=True).mean()
+    if col == 'real':
+        app_txt = ', natural influences removed'
+    elif col == 'decreal':
+        app_txt = ', natural influences and correlation removed'
+    else:
+        app_txt = ''
+    ax = plot(df[col], df.trend, ytp, win_name='projection_reduced'+tname,
+              title_app=app_txt)
+    df['smooth'] = df['real'].rolling(12, min_periods=1, center=True).mean()
     ax.plot(df.Year, df.smooth, color='b', lw=1, label='12-month Average')
     ax.legend(loc="center left")
 
@@ -896,16 +1207,19 @@ def plotInfluences(df=None, adjs=None, annual=False):
     None.
 
     """
+    size = (10, 9)  # size on charts in inches
     if df is None:
         df = compile_vars()
-    raw = df.copy()
-    df = fit_vars(df, adjs=adjs, annual=annual)
+    raw = compile_vars(df.index.name, df.index[0])  # ensures original data used
+    if 'reduced' not in df.columns:
+        df = fit_vars(df, adjs=adjs, annual=annual)
     e_cols = 'N12 N3 N4 N34'.split()
-    cols = 'vol solar enso sine'.split()
-    rcols = cols[:-1]  # 'sine' isn't adjusted
-    name = 'All Volcanic Solar ENSO Sine'.split()
+    cols = 'vol solar enso seasonal sine'.split()
     if 'sine' not in df.columns:
         cols.remove('sine')
+    for c in cols[3:]:
+        raw[c] = df[c].copy()
+    name = 'All Volcanic Solar ENSO Seasonal Sine'.split()
         
     def scale(r, s):
         ''' Return value that scales r to s
@@ -920,20 +1234,19 @@ def plotInfluences(df=None, adjs=None, annual=False):
     for c in e_cols:
         raw[c] *= scale(raw[c], df[c])
     raw['enso'] = raw[e_cols].sum(axis=1)
-    for c in rcols:
+    for c in cols:
         raw[c] *= scale(raw[c], df[c])
-    raw['vars'] = raw[rcols].sum(axis=1)
+    raw['vars'] = raw[cols].sum(axis=1)
     
     # plot major influences
-    axs = new_fig_rows('Influences', 
-                       'Natural Influences', 
+    axs = new_fig_rows(f'Influences_{df.index.name}', 
+                       f'Natural Influences on {df.spec.name} Global Temperature', 
                        'Temperature Effect °C', num=len(cols)+1)
-    axs[0].figure.set_size_inches(9,9)
+    axs[0].figure.set_size_inches(size)
     for i, c in enumerate(['vars']+cols):
         ax = axs[i]
         ax.plot(df[c])
-        if c in raw.columns:
-            ax.plot(raw[c], alpha=0.3)
+        ax.plot(raw[c], alpha=0.3)
         ax.set_ylim((-.35, .35))
         ax.text(.1, .2, name[i], transform=ax.transAxes, 
                 weight='bold')
@@ -942,10 +1255,10 @@ def plotInfluences(df=None, adjs=None, annual=False):
     ax.figure.legend(handles=[l1, l2], loc='lower left', framealpha=0.3,
                   bbox_to_anchor=(.7, .65, .5, .5))
     # Break down the ENSO index
-    axs = new_fig_rows('ENSO',
-                       'ENSO Components',
+    axs = new_fig_rows(f'ENSO_{df.index.name}',
+                       f'ENSO Components Fit to {df.spec.name} Global Temperature',
                        'Temperature Effect °C', num=len(e_cols)+1)
-    axs[0].figure.set_size_inches(9,9)
+    axs[0].figure.set_size_inches(size)
     names = ['Combined'] + e_cols
     for i, c in enumerate(['enso']+e_cols):
         ax = axs[i]
@@ -1007,7 +1320,7 @@ def plotHist(df=None, num=3):
             axs[c].set_xlim(xlim)
     plt.show()
         
-def plotOceanWarming():
+def plotWarmingDemo():
     """ Plot ocean warming curve demonstration
     """
     df = pd.DataFrame(index=np.arange(200))
@@ -1016,93 +1329,98 @@ def plotOceanWarming():
     rn = ' Result'
     df[wn] = 0.
     # Add a heating step function
-    df.loc[df.index > 25, wn] = 1.
+    st = 25
+    df.loc[df.index > st, wn] = 1.
     # Apply the ocean warming result
     # convolve_impulse converts annual values to a sum of steps
-    df[wn+rn] = convolve_impulse(df[wn])
+    df[wn+rn] = convolve_step(df[wn])
     # Add a cooling step function
     df[cn] = df[wn]
-    df.loc[df.index > 75, cn] = -1.
-    df.loc[df.index > 125, cn] = 0.
-    df[cn+rn] = convolve_impulse(df[cn])
+    df.loc[df.index >= (st+50), cn] = -1.
+    df.loc[df.index >= (st+100), cn] = 0.
+    df[cn+rn] = convolve_step(df[cn])
     # 
     vol = calc_volcano()
     # normalize
     vol /= -vol.max()
     start = 124
     df[vn] = vol.iloc[start:(start+200)].values
-    #df[vn] = vol.loc[vol.index.year > 1988].head(200).values
-    df[vn+rn] = convolve_impulse(df[vn], monthly=True)
+    df[vn+rn] = convolve_step(df[vn])
     # Plot curves
-    fig, axs = plt.subplots(3, sharex=True, num='Warming', 
-                            clear=True)
-    fig.suptitle('Illustration of Ocean Warming',
-                 ha='left', x=0.1)
+    axs = new_fig_rows('Warming', 
+                       'Illustration of Warming in Land and Ocean', '', 3)
     axs[-1].set_xlabel('Years (Months for Eruption)')
-    titles = ['A) Ocean Warming Curve',
-              'B) Ocean Warming and Cooling',
+    titles = ['A) Warming Curve from Step Rise in Energy Applied',
+              'B) Warming and Cooling',
               'C) Cooling from 1991 Mount Pinatubo Eruption (months)']
-    for ax, col, title in zip(axs, cols, titles):
-        ax.plot(df[col])
-        ax.plot(df[col+rn])
-        ax.set_title(title, loc='left', weight='bold')
+    lims = [(-0.2, 1.2),
+            (-1.2, 1.2),
+            (-1.2, 0.2)]
+    for ax, col, title, lim in zip(axs, cols, titles, lims):
+        ax.plot(df[col], color='C1', ds='steps-post')
+        ax.plot(df[col+rn], color='C0')
+        ax.set_ylim(lim)
+        ax.text(0, lim[1]-.1, title, ha='left', va='bottom', 
+                weight='bold')
     adj = 0.02  # text positioning adjustment
     axs[0].text(100, df[wn][100]-adj, 'Temperature Influence', 
-                color='C0', va='top')  
+                color='C1', va='top')  
     axs[0].text(100, df[wn+rn][100]-adj, 'Resulting Temperature',
-                color='C1', va='top')
+                color='C0', va='top')
     
-    axs[0].annotate(f'{df[wn+rn][50]*100:.0f}% warming\nafter 25 years',
-                    (50, df[wn+rn][50]), xytext=(20, -20), 
+    axs[0].annotate(f'{df[wn+rn][50]*100:.0f}% warming\nafter 20 years',
+                    ((st+20), df[wn+rn][st+20]), xytext=(20, -20), 
                     textcoords='offset points', va='top',
                     arrowprops=dict(width=2, headwidth=7, headlength=5))
     plt.show()
         
-def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
-             verbose=False):
+def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
+             name='Slopes', decorrelated=False, verbose=False):
     """ Plot charts determining the global temperature warming rate within
         the dataset to see if there is any statistically relevant acceleration.
         
         verbose: (Bool) If True, prints extra charts for blog
     """
+    reduced = True
     if df is None:
         df = compile_vars()
-        
-    if hasattr(df, 'detrend'):  # check if natural influences removed
-        reduced = True
-    elif adjs is None:
-        reduced = False
-    else:
-        df = fit_vars(df, adjs)
-        reduced = True
-        
+        if adjs is None:
+            reduced = False
+        else:
+            df = fit_vars(df, adjs)
+            reduced = True
+
     if annual:
         df = df.groupby(df.index.year).mean()
         df[yn] = df.index
     else:
         tr.convertYear(df)
-    if reduced:
-        df[dn] = df.real
-    else:
-        df[dn] = df.temp
+    if not col:
+        if reduced:
+            col = 'real'
+            rt = '(natural influences removed)'
+        else:
+            col = 'temp'
+            rt = ''
+    elif decorrelated:
+        rt = '(natural inflences and autocorrelation removed)'
 
     # get data as Numpy arrays
-    x = df.Year.to_numpy()
-    y = df.Data.to_numpy()
+    x = df[yn].to_numpy()
+    y = df[col].to_numpy()
     lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-    mx, my = tr.movingAverage(x, y, 12-annual*7)  # 1-year moving average
+    mx, my = tr.movingAverage(x, y, 12)  # 1-year moving average
     
-    # === Plot since 1980 ===
+    # === Plot since start ===
     
-    pt = {True:'Annual', False:'Monthly'}[annual]  # period text
-    pi = {True:1, False:12}[annual]  # period index
-    rt = {True:'(natural influences removed)', False:''}[reduced]
+    pt = 'Annual' if annual else 'Monthly'  # period text
+    pi = 1 if annual else 12  # period index
     
     if verbose:  # plot trend for full period
         ylabel = (f'{df.spec.name} {pt} Change from Pre-Industrial,'+
                   f'°C {rt}')
         ax = new_axes(name='Full Trend',
-                      title='Temperature Trend since 1980',
+                      title='Temperature Trend since {df.index[0].year}',
                       ylabel=ylabel)
         ax.plot(mx, my, 'g-', lw=2)        # moving average
         ax.plot(lsq.xline, lsq.yline, 'b-', lw=2)  # trend
@@ -1127,8 +1445,8 @@ def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
         a = df.temp.iloc[-20*pi[annual]:]  # last 20 years
         b = df.temp.iloc[-10*pi[annual]:]  # last 10 years
         for d, ax, txt in zip([a, b], axs, ['20-Year Trend', '10-Year Trend']):
-            x = d.Year.to_numpy()
-            y = d.Data.to_numpy()
+            x = d[yn].to_numpy()
+            y = d[col].to_numpy()
             lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
             ax.plot(x, y, 'k+', alpha=(0.3+.3*annual), lw=1)     # data
             if not annual:
@@ -1158,18 +1476,18 @@ def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
     lim = 5 * (12 - 11*annual)  # minimum number of months/years for slope
     stats = pd.DataFrame(index=df.index[lim:-lim], 
                          columns=columns, dtype=np.float64)
-    stats[yn] = df.Year
+    stats[yn] = df[yn]
     
     # calculate trend lines before and after d
-    cols = [dn, yn]
+    cols = [col, yn]
     unit = 10.  # °C per decade using data in fractions of a year
     for d in stats.index:
         t1 = df.loc[df.index < d, cols]
         t2 = df.loc[df.index >= d, cols]
         for t, side, hi, lo, nu, sy, sxy in zip([t1, t2], sides, highs, lows,
                                    nus, sys, sxys):
-            x = t.Year.to_numpy()
-            y = t.Data.to_numpy()
+            x = t[yn].to_numpy()
+            y = t[col].to_numpy()
             lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
             dev = stdDevs * lsq.sigma * unit
             stats.loc[d, side] = lsq.slope * unit
@@ -1181,7 +1499,7 @@ def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
             
     # plot the before and after slopes
     pt2 = {True:'Year', False:'Month'}[annual]
-    ax = new_axes(name='Slopes',
+    ax = new_axes(name=name,
                   title=f'Comparing Trends Before and After Each {pt2}',
                   ylabel=f'{df.spec.name} Trend in °C per decade {rt}')
     ax.plot(stats.before, '-', color='C0', lw=3, label='Trend Before Date')
@@ -1196,60 +1514,63 @@ def plotRate(df=None, adjs=None, annual=False, stdDevs=2.0,
     
     stats['overlap'] = stats.bhi - stats.alo
     imin = stats.overlap.loc[stats.Year>2000].idxmin() 
-    print(imin)
-    print(stats.loc[imin])
+    print(f'\nMost likely break point: {imin}')
+    # print(stats.loc[imin])  # data for imin
 
     plt.show()
     return
         
-def plotBreak(point, df=None, adjs=None, annual=False, stdDevs=2.):
+def plotBreak(point, data, continuous=True,
+              annual=False, rt='', stdDevs=2., ct=False):
     ''' Plot the slopes before and after a supplied break point. The point
         must be in integer or floating point years (fractional).
+        
+        continuous: if True, use a continuous fit
+        ct: if True, run Chow Test for no break. Not useful for correlated
+            data.
     '''
-    if df is None:
-        df = compile_vars()
-    if adjs is None:
-        reduced = False
-    elif hasattr(df, 'detrend'):  # check if natural influences removed
-        reduced = True
-    else:
-        df = fit_vars(df, adjs)
-        reduced = True
-    if annual:
+    df = pd.DataFrame(data.values, data.index, columns=[dn])
+    if annual and hasattr(df.index, 'year'):
         df = df.groupby(df.index.year).mean()
         df[yn] = df.index
     else:
         tr.convertYear(df)
-    if reduced:
-        df[dn] = df.real
-    else:
-        df[dn] = df.temp
-
-    rt = {True:'(natural influences removed)', False:''}[reduced]
-    rt1 = {True:'_Reduced', False:''}[reduced]
-    pt = {True:'Annual', False:'Monthly'}[annual]  # period text
+    
+    rt1 = '_Reduced' if (rt != '') else ''
+    pt = 'Annual' if annual else 'Monthly'  # period text
 
     ax = new_axes(name=f'Break_{pt}{rt1}_{point}',
                   title=f'Comparing {pt} Trends Before and After {point}',
-                  ylabel=f'{df.spec.name} Trend in °C per decade {rt}')
-    t1 = df.loc[df.Year < point, [dn, yn]]
-    t2 = df.loc[df.Year >= point, [dn, yn]]
-    labels = ['Before', 'After']
-    colors = ['C0', 'C1']
+                  ylabel=f'Temperature Trend in °C per decade {rt}')
+    t0 = df.loc[df[yn] < point]
+    t1 = df.loc[df[yn] >= point]
+    t2 = df 
+    labels = ['Before', 'After', 'All']
+    colors = ['C0', 'C1', 'w']
+    alphas = [1, 1, 0]
     unit = 10  # °C/decade
-    md = [0,1]  # metadata for before and after
-    for t, idx, c, label in zip([t1, t2], [0,1], colors, labels):
-        x = t.Year.to_numpy()
-        y = t.Data.to_numpy()
-        lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
+    md = [0, 1, 2]  # metadata for before and after
+    
+    # === Plot rates for before and after ===
+    
+    for t, idx, clr, label in zip([t0, t1, t2], [0,1,2], colors, labels):
+        x = t[yn].to_numpy()
+        y = t[dn].to_numpy()
+        if continuous and idx==1:  # Use a continuous fit
+            knot = (md[0].xline[-1], md[0].yline[-1])  # last point in fit
+            lsq = tr.analyzeData(x, y, knot=knot)
+        else:
+            lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
         md[idx] = lsq
+        if idx==2: 
+            continue
         x = [t.Year.iloc[0], t.Year.iloc[-1]]
         y = [lsq.slope * unit, lsq.slope * unit]
-        ax.plot(x, y, '-', color=c, lw=2, label=label)
+        ax.plot(x, y, '-', color=clr, lw=2, label=label)
         err = lsq.sigma * stdDevs * unit
-        ax.fill_between(x, y-err, y+err, color=c, alpha=0.15)
+        ax.fill_between(x, y-err, y+err, color=clr, alpha=0.15)
     tr.analyzeRate(df, dn, window=30, stdDevs=stdDevs)
-    x = df.Year.to_numpy()
+    x = df[yn].to_numpy()
     y = df.Rate.to_numpy() * unit
     ax.plot(x, y, 'k-', lw=1, label='Rate with 20-year window')
     ax.fill_between(x, df.R1*unit, df.R2*unit, color='k', alpha=.05)
@@ -1259,33 +1580,184 @@ def plotBreak(point, df=None, adjs=None, annual=False, stdDevs=2.):
     
     # === Plot temperature with these trends ===
     
-    change = {True: 'annual', False: 'monthly'}[annual]
     ax = new_axes(name=f'Slopes_{pt}{rt1}_{point}',
                   title=f'Comparing {pt} Trends Before and After {point:.0f}',
-                  ylabel=f'{df.spec.name} {change} change from pre-industrial (°C) {rt}')
+                  ylabel=f'{pt} Temperature change from pre-industrial (°C) {rt}')
     md[0].xline[1] = df.Year.iloc[-1]
-    for lsq, c in zip(md, colors):
-        ax.plot(lsq.x, lsq.y1, '-', color=c, lw=0.5)
-        ax.plot(lsq.x, lsq.y2, '-', color=c, lw=0.5)
+    preps = [f'before {point:.0f}', f'after {point:.0f}', 'for all data']
+    for lsq, clr, a, prep in zip(md, colors, alphas, preps):
+        ax.plot(lsq.x, lsq.y1, '-', color=clr, lw=0.5)
+        ax.plot(lsq.x, lsq.y2, '-', color=clr, lw=0.5)
         yline = lsq.slope * lsq.xline + lsq.intercept
-        ax.plot(lsq.xline, yline, '-', color=c, lw=2)
-    ax.plot(df.Year.values, df.Data.values, 'k+', alpha=0.4)
-    lsq = tr.analyzeData(df.Year.to_numpy(),
-                         df.Data.to_numpy(),
+        label = f'Trend {prep}: {lsq.slope*unit:.3f}°C per decade'
+        ax.plot(lsq.xline, yline, '-', color=clr, alpha=a, lw=2, label=label)
+    ax.plot(df[yn].to_numpy(), df[dn].to_numpy(), 'k+', alpha=0.4)
+    ax.legend(loc='upper left')
+    lsq = tr.analyzeData(df[yn].to_numpy(),
+                         df[dn].to_numpy(),
                          stdDevs)
-    c = chow(lsq.res, md[0].res, md[1].res, 2)
-    hyp = {True:'Pass above', False:'Fail below'}[(c.p > 0.05)]
-    text = ('Chow test for no break: \n' +
-            f'Test: {c.Chow:0.1f} (DF₁: {c.DoF1:.0f}, DF₂: {c.DoF2:.0f})\n' +
-            f'p-value: {c.p:0.3f} ({hyp} 0.05 threshold)')
-    ax.text(.2, .7, text, transform=ax.transAxes,
-            ha='left')
+    if ct:
+        ch = chow(lsq.res, md[0].res, md[1].res, 2)
+        hyp = {True:'Pass above', False:'Fail below'}[(ch.p > 0.05)]
+        text = ('Chow test for no break: \n' +
+                f'Test: {ch.Chow:0.1f} (DF₁: {ch.DoF1:.0f}, DF₂: {ch.DoF2:.0f})\n' +
+                f'p-value: {ch.p:0.3f} ({hyp} 0.05 threshold)')
+        ax.text(.2, .7, text, transform=ax.transAxes,
+                ha='left')
 
     plt.show()
     
-def plotNoCooling(adjs):
-    df = fit_vars(adjs=adjs)
-    df = df.loc[(df.index.year<2011)|(df.index.year>2014)]
+def plotARDemo(df=None, adjs=None, N=24, start='1990-01-01'):
+    '''
+    Demonstrate autocorrelation in temperature data
     
+    Parameters
+    ----------
+    
+    df : pandas.DataFrame
+        (Optional) Dataframe of fitted and detrended temperature data. If 
+        not provided, will create one.
+        
+    adjs : pandas.DataFrame
+        (Optional) Datafram of adjustments to make to natural influences
+        before fitting to temperature. If not provided, will determine best
+        values, but the process is takes a few minutes.
+    
+    N : int (Optional, default 24)
+        The number of lags (in months) to use in creating the autoregression 
+        model.
+        
+    start : str (Optional, default "1990-01-01")
+        The start date if compiling the fitted data. Not used if the data 
+        is provided in `df`.
+    '''
+    # Height in inches of short or tall figures (default: 6.75)
+    fig_short = 5.5
+    if df is not None:
+        df = compile_vars(start=start)
+        df = fit_vars(df, adjs=adjs)
+    # obs is detrended data with natural influences removed
+    obs = pd.Series(index=pd.date_range(df.index[0], df.index[-1], freq='MS'))
+    obs.loc[:] = df.detrend[obs.index].to_numpy()
+    obs -= obs.mean()
+    
+    # Plot detrended temperature
+    ax = new_axes('stationary', 
+                  'Global Temperature with Trend and Natural Influences Removed', 
+                  f'{df.spec.name} monthly change from trend (°C)')
+    ax.figure.set_figheight(fig_short)
+    smooth = tr.lowess(obs, pts=15)
+    ax.plot(obs, '+k', alpha=.3)
+    ax.plot(smooth, color='C1', label='15-Month Locally Weighted Smoothing (LOWESS)')
+    ax.text(df.index[-1], -.15, f'Trend: {df.fit["slope"]*10:0.3f}°C/decade', 
+            ha='right', va='top')
+    ax.set_ylim((-.34, .34))
+    ax.legend()
+    
+    # Plot autocoorelation lags to show that data is still autocorrelated.
+    ax = new_axes('autocorrelation', 
+                  'Autocorrelation of Global Monthly Temperature', 
+                  '')
+    ax.figure.set_figheight(fig_short)
+    ax.set_xlabel('Lag')
+    plot_acf(obs, ax, lags=N, title='', adjusted=True, alpha=.15)
+    ax.set_ylim([-.25, 1.19])
+    
+    # Plot partial autocorrelation to estimate number of AR parameters needed
+    ax = new_axes('partial', 
+                  'Partial Autocorrelation of Global Temperature', 
+                  '')
+    ax.figure.set_figheight(fig_short)
+    ax.set_xlabel('Lag')
+    plot_pacf(obs, ax, N, title='', method='yw', alpha=.15)  # adjusted Yule-Walker
+    ax.set_ylim([-.25, 1.19])
+    
+    # Get model parameters
+    res = get_ARIMA(obs, N)
+    params = res.params.drop(index=['ma.L1'])
+    sigma = params.sigma2 ** 0.5  # get standard deviation of input noise
+    lags = var2lag(params)  # make variable names into lags
+    print(f'\nLags\n{lags}\n')
+    
+    # Create model
+    arima = sm.tsa.arima.ARIMA
+    model = arima(obs, order=(lags, 0, 0), dates=obs.index, trend='n')
+    sim = model.simulate(params, len(obs))
+    axs = new_fig_rows('compare', 
+        'Comparison of Temperature and Model', 
+        '', 2, labels=['Temperature (trend and natural influences removed)',
+                       'Autocorrelation Model'])
+    axs[0].plot(obs)
+    axs[1].plot(sim)
+    
+    # Test non-stationary input data
+    params.drop('sigma2', inplace=True)
+    test = df.loc[df.Year>=2005, ['Year']].copy()
+    test['line'] = 0.
+    slope = 0.015
+    late =test.loc[test.Year>=2010].index
+    test.loc[late, 'line'] = slope * (test.Year[late] - 2010)
+    test['data'] = test.line + np.random.normal(0, sigma, len(test))
+    test['AR'] = AR_process(test.data, params)
+    test['decorr'] = decorrelate(test.AR, params)
+    axs = new_fig_rows('compare_test', 
+        'Comparison of Test Noise and Model Output', 
+        '', 3, labels=['Noise', 'Correlated', 'Decorrelated'])
+    axs[0].plot(test.data)
+    axs[1].plot(test.AR)
+    axs[2].plot(test.decorr)
+    lims = pd.DataFrame(index=np.arange(3), columns=['lo', 'hi'])
+    for i in range(3):
+        axs[i].plot(test.line)
+        lims.loc[i, :] = axs[i].get_ylim()
+    for i in range(3):
+        axs[i].set_ylim((lims.lo.min(), lims.hi.max()))
+        
+    
+    df['decorr'] = decorrelate(df.detrend, params)
+    axs = new_fig_rows('compare_temp', 
+        'Comparison of Temperature and Decorrelated Data', 
+        f"{df.spec.name} monthly (°C), with trend and natural influences removed", 
+        2, labels=['', 'Decorrelated'])
+    for ax, data in zip(axs, [df.detrend, df.decorr]):
+        smooth = tr.lowess(data, pts=15)
+        ax.plot(data, '+k', alpha=.3, label='Monthly')
+        ax.plot(smooth, color='C1', label='LOWESS')
+        ax.set_ylim((-.34, .34))
+    axs[1].legend(loc='upper center')
+    
+    ax = new_axes('acf_decorrelated', 
+                  'Autocorrelation of Decorellated Temperature', 
+                  '')
+    ax.figure.set_figheight(fig_short)
+    ax.set_xlabel('Lag')
+    plot_acf(df.decorr, ax, lags=N, title='', adjusted=True)
+    ax.set_ylim([-.25, 1.19])
+    
+    df['decreal'] = df.decorr + df.trend
+    
+    plotRate(df, col='decreal', decorrelated=True)
+    plotBreak(2015, df.decreal, 
+              rt='(natural influences and autocorrelation removed)')  
+    plotTempTrend(df, adjs, col='decreal')
+    
+    plt.show()
+    
+# %% Notes
+"""
+# Startup steps to recreate working data
+# Be sure to run the necessary files in the iPython window:
+    datastore.py
+    qplot.py
+    projection.py
+tmp = 'giss'
+ds.update_modern(tmp)
+ds.update_modern('enso')
+df = compile_vars(source=tmp)
+adj = optimize_adjustments(df)  # so you only have to do this once
+plotInfluences(df, adj)
+plotTempVar(df, adj)  # check data
+
+"""
     
 
