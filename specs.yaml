@@ -25,13 +25,14 @@ best:
     usecols: [0, 1, 2, 3]
     comment: '%'
     parse_dates: {'Date':['Year', 'Month']}
+    date_format: {'Year': '%Y', 'Month': '%m'}
   start_year: 1850
   start_month: 1
   save_as: 'best_monthly.txt'
 
 hadcrut:
   name: 'UK Met Office'
-  url: 'https://www.metoffice.gov.uk/hadobs/hadcrut5/data/HadCRUT.5.0.2.0/analysis/diagnostics/HadCRUT.5.0.2.0.analysis.summary_series.global.monthly.csv'
+  url: 'https://www.metoffice.gov.uk/hadobs/hadcrut5/data/HadCRUT.5.1.0.0/analysis/diagnostics/HadCRUT.5.1.0.0.analysis.summary_series.global.monthly.csv'
   format:
     sep: ','
     header: 0
@@ -85,6 +86,7 @@ uah:
     usecols: [0, 1, 2]
     names: ['Year', 'Month', 'Data']
     parse_dates: {'Date':['Year', 'Month']}
+    date_format: {'Year': '%Y', 'Month': '%m'}
     index_col: 0
   start_year: 1978
   start_month: 12

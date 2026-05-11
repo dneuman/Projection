@@ -79,8 +79,34 @@ def update_modern(f: str):
             lines += 13 - start_month
             lines += now.month - skip  # skipped lines not included
         fmt['nrows'] = lines
+
+    #  new code required to get around lost feature in pandas 3.0
+    parse_dates = fmt.pop('parse_dates', False)
+    date_format = fmt.pop('date_format', False)
+
     response = requests.get(url, headers=headers)
     df = pd.read_csv(StringIO(response.text), **fmt)
+    
+    if parse_dates:
+        # get list of date-like columns
+        if isinstance(parse_dates, str):  # single column
+            name = parse_dates
+            cols = [parse_dates]
+            fmt_str = date_format
+        else:  # multiple columns
+            i = list(parse_dates.keys())[0]
+            cols = parse_dates[i]
+            # get format for each column
+            fmt_str = '-'.join([date_format[col] for col in cols])
+        # turn date-like columns into strings and combine
+        df[cols] = df[cols].apply(lambda x: x.astype('str'))
+        date = df[cols].apply(lambda x: '-'.join(x), axis=1)
+        
+        df.index = pd.to_datetime(date, format=fmt_str)
+        df.index.name = 'Date'  # standard datetime column name
+        # remove superfluous columns
+        df.drop(columns=cols, inplace=True)
+    
     if 'nrows' in spec.keys():  # remove spurious lines
         mx = df.index.argmax()
         df = df.iloc[:mx+1]
