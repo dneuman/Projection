@@ -81,8 +81,11 @@ def update_modern(f: str):
         fmt['nrows'] = lines
 
     #  new code required to get around lost feature in pandas 3.0
+    #  where multiple columns could be combined into a single date
     parse_dates = fmt.pop('parse_dates', False)
     date_format = fmt.pop('date_format', False)
+    if parse_dates:
+        fmt['index_col'] = False
 
     response = requests.get(url, headers=headers)
     df = pd.read_csv(StringIO(response.text), **fmt)
@@ -133,7 +136,7 @@ def update_modern(f: str):
         df.sort_index(inplace=True)
     df.dropna(inplace=True)
 
-    df.to_csv(pre+spec['save_as'], sep='\t', 
+    df.to_csv(pre+spec['file_name'], sep='\t', 
               float_format='%.4f', date_format='%Y-%m-%d')
     df.label = name
     return df
@@ -146,7 +149,7 @@ def load_modern(f: str, annual=True):
         annual: bool, return annual data, default True
     """
     spec = make_spec(dst.specs[f])
-    fname = spec.save_as
+    fname = spec.file_name
     df = pd.read_csv(pre+fname, sep='\t', index_col=0, parse_dates=[0])
     if f in dst.specs['temperature']:
         # assume temperatures have a datetime index
@@ -228,7 +231,7 @@ def load_processed(f: str):
     if f not in dst.specs:
         raise Exception(f'{f} is unknown. Check specs.yaml')
     spec = make_spec(dst.specs[f])
-    df = pd.read_csv(pre+spec.save_as, sep='\t', index_col=0, parse_dates=[0],
+    df = pd.read_csv(pre+spec.file_name, sep='\t', index_col=0, parse_dates=[0],
                      comment='#')
     df.spec = ''  # avoid warning for setting columns
     df.spec = spec
