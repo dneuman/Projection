@@ -1,7 +1,9 @@
 # Data Specifications
 #   use header: 0 to rename headers on first (0-index) line
-#   don't include header: if there are no headers
-
+#     don't include header: if there are no headers
+#   use index_col = n: if there is a specific index column to use as-is
+#     otherwise use the parse_dates and date_format keywords if one or more
+#     columns must be converted to dates.
 # == File Info ==
 # These lists determine how to process the raw data. 
 modern: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah', 'mei', 'enso',
@@ -21,14 +23,13 @@ best:
   format:
     sep: '\s+'
     names: ['Year', 'Month', 'Data', 'Error']
-    index_col: 0
     usecols: [0, 1, 2, 3]
     comment: '%'
     parse_dates: {'Date':['Year', 'Month']}
     date_format: {'Year': '%Y', 'Month': '%m'}
   start_year: 1850
   start_month: 1
-  save_as: 'best_monthly.txt'
+  file_name: 'best_monthly.txt'
 
 hadcrut:
   name: 'UK Met Office'
@@ -39,9 +40,9 @@ hadcrut:
     usecols: [0, 1, 2, 3]
     skipinitialspace: True
     names: ['Date', 'Data', 'Err5', 'Err95']
-    date_format: {'Date': '%Y-%m'}
-    index_col: 0
-  save_as: 'hadcrut5_monthly.txt'
+    parse_dates: 'Date'
+    date_format: '%Y-%m'
+  file_name: 'hadcrut5_monthly.txt'
 
 giss:
   name: 'NASA'
@@ -53,7 +54,7 @@ giss:
     index_col: 0
     na_values: '***'
   table: True
-  save_as: 'gistemp.txt'
+  file_name: 'gistemp.txt'
 
 noaa:
   name: 'NOAA'
@@ -65,7 +66,7 @@ noaa:
     usecols: [0, 1]
     names: ['Year', 'Data']
     index_col: 0
-  save_as: 'noaa.txt'
+  file_name: 'noaa.txt'
 
 jma:
   name: 'Japan Met Agency'
@@ -75,7 +76,7 @@ jma:
     header: 0
     index_col: 0
   table: True
-  save_as: 'jma.txt'
+  file_name: 'jma.txt'
   
 uah:
   name: 'UAH v6.0'
@@ -87,10 +88,9 @@ uah:
     names: ['Year', 'Month', 'Data']
     parse_dates: {'Date':['Year', 'Month']}
     date_format: {'Year': '%Y', 'Month': '%m'}
-    index_col: 0
   start_year: 1978
   start_month: 12
-  save_as: 'uah.txt'
+  file_name: 'uah.txt'
   
 # == Other modern data ==
 
@@ -103,9 +103,8 @@ enso:
     usecols: [0, 1, 3, 5, 7, 9]
     parse_dates: {'Date':['Year', 'Month']}
     date_format: {'Year': '%Y', 'Month': '%m'}
-    index_col: 0
     names: ['Year', 'Month', 'N12', 'N3', 'N4', 'N34']  
-  save_as: 'enso.txt'
+  file_name: 'enso.txt'
 
 mei:
   name: 'Multivariate ENSO Index'
@@ -117,7 +116,7 @@ mei:
     na_values: -999.00
   start_year: 1979
   table: True
-  save_as: 'mei.txt'
+  file_name: 'mei.txt'
   
 pdo:
   name: 'Pacific Decadal Oscillation'
@@ -129,7 +128,7 @@ pdo:
     header: 0
     index_col: 0
   table: True
-  save_as: 'pdo.txt'
+  file_name: 'pdo.txt'
   
 solar:
   name: 'Solar Total Surface Irradiance'
@@ -148,7 +147,7 @@ solar:
     index_col: 1
     names: ['Year', 'Data', 'Date']
   origin: 'julian'
-  save_as: 'solar.txt'
+  file_name: 'solar.txt'
     
 # == Historic data ==
 
@@ -161,7 +160,7 @@ co2composite:
     2015. Revision of the EPICA Dome C CO2 record from 800 to 600 kyr before
     present. Geophysical Research Letters.
   doi: 'http://doi.org/10.1002/2014GL061957'
-  save_as: 'co2composite.txt'
+  file_name: 'co2composite.txt'
 
 co2ml:
   name: 'Scripps Mauna Loa'
@@ -173,7 +172,7 @@ co2ml:
       biosphere and oceans from 1978 to 2000. I. Global aspects,
       SIO Reference Series, No. 01-06, Scripps Institution of
       Oceanography, San Diego, 88 pages, 2001.
-  save_as: 'co2ml.txt'
+  file_name: 'co2ml.txt'
 
 sulfates:
   name: 'Haustein, Otto, et al (2019)'
@@ -184,7 +183,7 @@ sulfates:
     (2019). A Limited Role for Unforced Internal Variability in
     Twentieth-Century Warming, Journal of Climate, 32(16), 4893-4917.
   doi: 'https://doi.org/10.1175/JCLI-D-18-0555.1'
-  save_as: 'sulfates.txt'
+  file_name: 'sulfates.txt'
 
 satire:
   name: 'Solar Activity: SATIRE-M and -T'
@@ -196,22 +195,22 @@ satire:
     Year: [1840, 1690, 1470, 1290, 1190, 1040]
     Data: [-0.25, -0.4, -0.15, -0.35, 0.15, -0.3]
   doi: 'https://doi.org/10.17617/1.5U'
-  save_as: 'satire.txt'
+  file_name: 'satire.txt'
 
 volcano_forcing:
   name: 'Volcano Forcing, IPPC AR5 WG1 (2013) Table All.1.2'
   info: http://www.climatechange2013.org/images/report/WG1AR5_AIISM_Datafiles.xlsx
-  save_as: 'volcano_forcing.txt'
+  file_name: 'volcano_forcing.txt'
 
 land:
   name: 'Land Use Change, IPPC AR5 WG1 (2013) Table All.1.2'
   info: http://www.climatechange2013.org/images/report/WG1AR5_AIISM_Datafiles.xlsx
-  save_as: 'land.txt'
+  file_name: 'land.txt'
 
 ghg:
   name: 'Greenhouse Gases: NOAA Annual Greenhouse Gas Index'
   info: http://www.esrl.noaa.gov/gmd/aggi/aggi.html
-  save_as: 'ghg.txt'
+  file_name: 'ghg.txt'
 
 forcing:
   src:    ['Sources:',
@@ -230,4 +229,4 @@ forcing:
            '  Solar: SATIRE-M',
            '    www2.mps.mpg.de/projects/sun-climate/data.html',
            ]
-  save_as: 'forcing.txt'
+  file_name: 'forcing.txt'
