@@ -208,7 +208,7 @@ def selectData(data, cn=None, start=None, end=None):
     d = data.loc[data['Year'].between(start, end)]
     return d['Year'], d[cn]
 
-def linearFit(x, y, knot=None):
+def linearFit(xx, yy, knot=None):
     """ Determines the linear fit to supplied Numpy arrays. Use
         `df['Column Name'].to_numpy()` to extract array from DataFrame.
         Returns dictionary of results.
@@ -218,6 +218,8 @@ def linearFit(x, y, knot=None):
     """
     # Equation format is y = a + bx
     adjusted = False
+    x = xx.copy()  # create copies that can be altered
+    y = yy.copy()
     if hasattr(knot, 'index') and (len(knot)==2):
         # Move data to be relative to the knot
         x -= knot[0]
@@ -432,4 +434,3 @@ def example():
 
 if __name__ == '__main__':
     lsq = example()
-
