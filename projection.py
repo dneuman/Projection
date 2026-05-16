@@ -23,9 +23,6 @@ import arviz as az
 
 dst = ds.dst  # Data Store, an object that loads and stores data in a common format
 plt.style.use('clean')
-pd.options.display.float_format = '{:.4f}'.format  # change print format
-pd.options.display.width = 70
-np.set_printoptions(precision=5, linewidth=70)
 
 yn, mn, dn, en, sn = ['Year', 'Month', 'Data', 'Error', 'Smooth']
 
@@ -1106,8 +1103,8 @@ def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
     ytp = slope * xp + intercept
     ax = plot(df.temp, yt, ytp, win_name='projection_compare'+tname,
               title_app=', Comparing Natural Influences')
-    y = (df.vars + df.lowess).values
-    ax.plot(df.Year, y, label = 'Natural Influences')
+    y = (df.vars + df.lowess).to_numpy()
+    ax.plot(df.Year, y, c='r' ,label = 'Natural Influences')
     ax.legend(loc="center left")
     
     #=== Plot Trend with natural influences removed ===
@@ -1381,6 +1378,7 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
         
         verbose: (Bool) If True, prints extra charts for blog
     """
+    rt = ''
     reduced = True
     if df is None:
         df = compile_vars()
@@ -1401,10 +1399,10 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
             rt = '(natural influences removed)'
         else:
             col = 'temp'
-            rt = ''
     elif decorrelated:
         rt = '(natural inflences and autocorrelation removed)'
-
+        
+    print(f'column:{col} - reduced:{reduced}')
     # get data as Numpy arrays
     x = df[yn].to_numpy()
     y = df[col].to_numpy()
@@ -1414,13 +1412,13 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     # === Plot since start ===
     
     pt = 'Annual' if annual else 'Monthly'  # period text
-    pi = 1 if annual else 12  # period index
+    interval = 1 if annual else 12  # period index
     
     if verbose:  # plot trend for full period
         ylabel = (f'{df.spec.name} {pt} Change from Pre-Industrial,'+
                   f'°C {rt}')
         ax = new_axes(name='Full Trend',
-                      title='Temperature Trend since {df.index[0].year}',
+                      title=f'Temperature Trend since {df.index[0].year}',
                       ylabel=ylabel)
         ax.plot(mx, my, 'g-', lw=2)        # moving average
         ax.plot(lsq.xline, lsq.yline, 'b-', lw=2)  # trend
@@ -1442,8 +1440,8 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
                            title='Comparing Trends with Differing Amounts of Data',
                            ylabel=ylabel,
                            num=2)
-        a = df.temp.iloc[-20*pi[annual]:]  # last 20 years
-        b = df.temp.iloc[-10*pi[annual]:]  # last 10 years
+        a = df.iloc[-20*interval:]  # last 20 years
+        b = df.iloc[-10*interval:]  # last 10 years
         for d, ax, txt in zip([a, b], axs, ['20-Year Trend', '10-Year Trend']):
             x = d[yn].to_numpy()
             y = d[col].to_numpy()
@@ -1467,13 +1465,13 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     columns = ['before', 'bhi', 'blo', 'after', 'ahi', 'alo',
                'bnu', 'bsy', 'bsxy', 
                'anu', 'asy', 'asxy']
-    sides = columns[0:6:3]
+    means = columns[0:6:3]
     highs = columns[1:6:3]
     lows = columns[2:6:3]
     nus = columns[6::3]
     sys = columns[7::3]
     sxys = columns[8::3]
-    lim = 5 * (12 - 11*annual)  # minimum number of months/years for slope
+    lim = 5 * interval # minimum number of months/years for slope
     stats = pd.DataFrame(index=df.index[lim:-lim], 
                          columns=columns, dtype=np.float64)
     stats[yn] = df[yn]
@@ -1481,18 +1479,24 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     # calculate trend lines before and after d
     cols = [col, yn]
     unit = 10.  # °C per decade using data in fractions of a year
+    knot = None  # Where the second slope line must start
     for d in stats.index:
-        t1 = df.loc[df.index < d, cols]
+        t1 = df.loc[df.index <= d, cols]
         t2 = df.loc[df.index >= d, cols]
-        for t, side, hi, lo, nu, sy, sxy in zip([t1, t2], sides, highs, lows,
+        for t, mean, hi, lo, nu, sy, sxy in zip([t1, t2], means, highs, lows,
                                    nus, sys, sxys):
             x = t[yn].to_numpy()
             y = t[col].to_numpy()
-            lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-            dev = stdDevs * lsq.sigma * unit
-            stats.loc[d, side] = lsq.slope * unit
-            stats.loc[d, hi] = lsq.slope * unit + dev
-            stats.loc[d, lo] = lsq.slope * unit - dev
+            lsq = tr.analyzeData(x, y, stdDevs, knot=knot)  # Analyse data
+            if t.index[0]==df.index[0]:
+                knot = (lsq.xline[-1], lsq.yline[-1])
+            else:
+                knot = None  # reset if one was provided 
+            slope = lsq.slope * unit
+            err = lsq.sigma * stdDevs * unit
+            stats.loc[d, mean] = slope
+            stats.loc[d, hi] = slope + err
+            stats.loc[d, lo] = slope - err
             stats.loc[d, nu] = lsq.nu
             stats.loc[d, sy] = lsq.sy
             stats.loc[d, sxy] = lsq.sxy
@@ -1507,14 +1511,14 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     ax.plot(stats.after, '-', color='C1', lw=3, label='Trend After Date')
     ax.fill_between(stats.index, stats.alo, stats.ahi, color='C1', alpha=0.25)
     ax.set_ylim(-.2, .4)
+    # legend element for range
     ax.plot([], [], 'k-', lw=10, alpha=0.15, label='95% Confidence Ranges')
-    ax.legend(loc='upper center')
+    ax.legend(loc='upper left')
     
-    # === plot histograms for lowest overlap ===
-    
+    # find greatest gap or lowest overlap    
     stats['overlap'] = stats.bhi - stats.alo
     imin = stats.overlap.loc[stats.Year>2000].idxmin() 
-    print(f'\nMost likely break point: {imin}')
+    print(f'\nMost likely break point: {imin}, {df.loc[imin, yn]}')
     # print(stats.loc[imin])  # data for imin
 
     plt.show()
@@ -1539,12 +1543,14 @@ def plotBreak(point, data, continuous=True,
     rt1 = '_Reduced' if (rt != '') else ''
     pt = 'Annual' if annual else 'Monthly'  # period text
 
-    ax = new_axes(name=f'Break_{pt}{rt1}_{point}',
-                  title=f'Comparing {pt} Trends Before and After {point}',
-                  ylabel=f'Temperature Trend in °C per decade {rt}')
-    t0 = df.loc[df[yn] < point]
+    t0 = df.loc[df[yn] <= point]
     t1 = df.loc[df[yn] >= point]
-    t2 = df 
+    t2 = df
+    p_date = t1.index[0]
+    d_txt = f'{p_date.year}-{p_date.month}'
+    ax = new_axes(name=f'Break_{pt}{rt1}_{point}',
+                  title=f'Comparing {pt} Trends Before and After {d_txt}',
+                  ylabel=f'Temperature Trend in °C per decade {rt}')
     labels = ['Before', 'After', 'All']
     colors = ['C0', 'C1', 'w']
     alphas = [1, 1, 0]
@@ -1558,7 +1564,7 @@ def plotBreak(point, data, continuous=True,
         y = t[dn].to_numpy()
         if continuous and idx==1:  # Use a continuous fit
             knot = (md[0].xline[-1], md[0].yline[-1])  # last point in fit
-            lsq = tr.analyzeData(x, y, knot=knot)
+            lsq = tr.analyzeData(x, y, stdDevs, knot=knot)
         else:
             lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
         md[idx] = lsq
@@ -1581,7 +1587,7 @@ def plotBreak(point, data, continuous=True,
     # === Plot temperature with these trends ===
     
     ax = new_axes(name=f'Slopes_{pt}{rt1}_{point}',
-                  title=f'Comparing {pt} Trends Before and After {point:.0f}',
+                  title=f'Comparing {pt} Trends Before and After {d_txt}',
                   ylabel=f'{pt} Temperature change from pre-industrial (°C) {rt}')
     md[0].xline[1] = df.Year.iloc[-1]
     preps = [f'before {point:.0f}', f'after {point:.0f}', 'for all data']
@@ -1753,11 +1759,12 @@ def plotARDemo(df=None, adjs=None, N=24, start='1990-01-01'):
 tmp = 'giss'
 ds.update_modern(tmp)
 ds.update_modern('enso')
+ds.update_modern('solar')
 df = compile_vars(source=tmp)
 adj = optimize_adjustments(df)  # so you only have to do this once
 plotInfluences(df, adj)
 plotTempVar(df, adj)  # check data
 
+
 """
     
-
