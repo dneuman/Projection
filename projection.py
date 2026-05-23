@@ -217,125 +217,6 @@ def date_string(d):
     """
     return f'{d[0]}-{d[1]}-01'
 
-def date_index(start, end, freq='MS'):
-    """
-    Get Pandas DateTime index with the supplied start and end dates
-
-    Parameters
-    ----------
-    start : tuple(int, int)
-        (year, month: 1-index).
-    end : tuple(int, int)
-        (year, month: 1-index).
-    freq : string
-        ['MS'|'Y'] : monthly start or yearly (default monthly)
-
-    Returns
-    -------
-    DateTime index.
-    """
-    a = date_string(start)
-    b = date_string(end)
-    return pd.date_range(start=a, end=b, freq=freq)
-
-def calc_volcano(end=None, annual=False):
-    """
-    Retrieve aerosol data and turn it into a volcanic aerosol forcing time
-    series. Use seasonal solar variability, and albedo at each latitude to
-    calculate.
-
-    Parameters
-    ----------
-    end : tuple(year:int, month:int), or int, optional
-        End date or year if it is earlier than data. The default is None.
-    annual : bool, default False
-        If True, return annual means.
-
-    Returns
-    -------
-    cvol : pd.Series
-        volcanic index (max = 1).
-
-    """
-    # Get aerosol data from the GloSSAC satellite instrument data set
-    # This is in NetCDF format and requires a free account to access
-    # Source: https://asdc.larc.nasa.gov/project/GloSSAC
-    # A new version is available at the end of each year.
-    url = 'Data/GloSSAC_V2.22.nc'
-    gl = xr.open_dataset(url)
-    aod = gl.Glossac_Aerosol_Optical_Depth[:,:,2]  # 525 nm
-    # time index is integers in the form yyyymm
-    time_index = aod.indexes['time']
-    start = ((time_index[0] // 100), (time_index[0] % 100))
-    last = ((time_index[-1] // 100), (time_index[-1] % 100))
-    if not end:
-        end = last
-    elif hasattr(end, 'month'):
-        end = (end.year, end.month)
-    elif annual:
-        end = (end, 12)
-    dates = date_index(start, end)
-    
-    # new dataframe with date index
-    vol_df = pd.DataFrame(index=dates, columns=aod.lat.values, 
-                          dtype=np.float64)
-    vol_df.iloc[:aod.values.shape[0],:] = aod.values
-    # remove baseline aerosols from 1997 -2005 quiet period
-    vol_df -= vol_df[(vol_df.index.year>=1997) & 
-                     (vol_df.index.year<=2005)].mean()
-    
-    deg2rad = np.pi/180.0
-    max_tilt_rad = 23.44 * deg2rad  # axial tilt
-    # note month is 1-indexed
-    tilt_rad = -max_tilt_rad * np.cos((dates.month - 2 + 21/31)/12 * 2 * np.pi)
-    lat_rad = vol_df.columns.values * deg2rad
-    true_lat_rad = np.add.outer(tilt_rad, lat_rad)
-    adjust = np.maximum(0, np.cos(true_lat_rad))  # truncate negative values at 0
-    adjust *= np.cos(lat_rad)  # area at polar latitudes less than at equator
-    vol_df *= adjust
-
-    # load planet albedo at 0.5° resolution for Dec and Jun, 2022
-    # Satellite doesn't have albedo for regions in darkness.
-    # Although Sep or Mar would work, more melting has occured for one hemisphere
-    # Source: https://neo.gsfc.nasa.gov/view.php?datasetId=MCD43C3_M_BSA&year=2022
-    url = 'Data/MCD43C3_M_BSA_2022-06-01_rgb_720x360.SS.CSV'
-    albedo = pd.read_csv(url, sep=',', index_col=0, header=0, dtype=np.float64)
-    url = 'Data/MCD43C3_M_BSA_2022-12-01_rgb_720x360.SS.CSV'
-    south = pd.read_csv(url, sep=',', index_col=0, header=0, dtype=np.float64)
-    albedo.loc[albedo.index < 0] = south.loc[south.index < 0]
-    
-    # Now calculate heating rate for land and ocean
-    celsius2kelvin = 274.15
-    area_ocean = .71  # ocean area of Earth
-    area_land = 1. - area_ocean
-    heat_ocean = .95  # amount of incoming heat energy stored in ocean
-    heat_land = 1. - heat_ocean
-    heat_per_area_ocean = heat_ocean / area_ocean
-    heat_per_area_land = heat_land / area_land
-    temperature_land = 8.6 + celsius2kelvin  # Berkely Earth
-    temperature_global = 14.7 + celsius2kelvin  # Berkely Earth
-    temperature_ocean = (temperature_global - temperature_land * area_land) \
-                        / area_ocean
-    heat_capacity_ocean = heat_per_area_ocean / temperature_ocean
-    heat_capacity_land = heat_per_area_land / temperature_land
-    ocean_vs_land_capacity = heat_capacity_ocean / heat_capacity_land  # 7.53
-    # adjust albedo for ocean
-    react = 1 - albedo
-    # albedo of 9999 is for ocean or no data
-    react[react < 0] = 1. / ocean_vs_land_capacity  # higher capacity less reactive
-    react = react.mean(axis=1)
-    r_df = pd.DataFrame(react, columns=['React'])
-    # combine latitudes to match aerosol data
-    r_df['lat'] = np.floor((r_df.index-5)/5)*5 + 7.5
-    react = r_df.groupby('lat').mean()
-    react = react / react.max()
-    vol_df[:] *= react[-77.5:77.5].values.T
-    vol = vol_df.mean(axis=1)
-    vol.fillna(0, inplace=True)
-    
-    if annual:
-        vol = vol.groupby(vol.index.year).mean()
-    return vol
 
 def fft(ds, mult=None):
     ''' 
@@ -406,11 +287,11 @@ def fftn(ds, mult=None, verbose=False):
         plt.show()
     return ft
 
-def var2lag(vars):
+def var2lag(model):
     '''
     Turn a series of model variables into an array of lags
     '''
-    p = vars.copy()
+    p = model.copy()
     if 'sigma2' in p.index:
         p.drop('sigma2', inplace=True)
     if 'ma.L1' in p.index:
@@ -437,7 +318,7 @@ def compile_vars(source='hadcrut', start='1990-01-01'):
     df['lowess'] = tr.lowess(df.temp, pts=15*12)  # this is the local trend, not a line
     df['flat'] = df.temp - df.lowess
  
-    df['vol'] = calc_volcano(end, annual=False)
+    df['vol'] = dst.stratvol(annual=False).loc[start:end]
     df['solar'] = dst.solar(annual=False).loc[start:end]
     df.solar -= df.solar.mean()  # remove offset
     enso = dst.enso(annual=False).loc[start:end]
@@ -1336,10 +1217,8 @@ def plotWarmingDemo():
     df.loc[df.index >= (st+50), cn] = -1.
     df.loc[df.index >= (st+100), cn] = 0.
     df[cn+rn] = convolve_step(df[cn])
-    # 
-    vol = calc_volcano()
-    # normalize
-    vol /= -vol.max()
+    vol = dst.stratvol()
+    vol /= -vol.max()  #normalize
     start = 124
     df[vn] = vol.iloc[start:(start+200)].values
     df[vn+rn] = convolve_step(df[vn])
@@ -1762,6 +1641,7 @@ ds.update_modern('enso')
 ds.update_modern('solar')
 df = compile_vars(source=tmp)
 adj = optimize_adjustments(df)  # so you only have to do this once
+df = fit_vars(df, adjs=adj)
 plotInfluences(df, adj)
 plotTempVar(df, adj)  # check data
 

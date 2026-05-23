@@ -8,7 +8,7 @@
 # These lists determine how to process the raw data. 
 modern: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah', 'mei', 'enso',
         'pdo', 'solar']
-special: []
+special: ['volc']
 temperature: ['best', 'hadcrut', 'giss', 'noaa', 'jma', 'uah']
 
 # temperature offset from pre-industrial era to 1961-1990 inclusive.
@@ -148,6 +148,15 @@ solar:
     names: ['Year', 'Data', 'Date']
   origin: 'julian'
   file_name: 'solar.txt'
+  
+stratvol:
+  name: 'Stratospheric Volcanic Particles'
+  info: 'https://asdc.larc.nasa.gov/project/GloSSAC'
+    # Get aerosol data from the GloSSAC satellite instrument data set
+    # This is in NetCDF format and requires a free account to access
+    # Source: https://asdc.larc.nasa.gov/project/GloSSAC
+    # A new version is available at the end of each year.
+  file_name: 'stratvol.txt'
     
 # == Historic data ==
 
