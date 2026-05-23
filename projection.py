@@ -341,30 +341,30 @@ def adjust_vars(df, adj, val):
     '''
     n = len(df)
     cols = df.columns
-    vars = pd.DataFrame(index=df.index, columns=cols)
-    vars[cols] = 0.0
+    dv = pd.DataFrame(index=df.index, columns=cols)
+    dv[cols] = 0.0
     for i, col in enumerate(cols):
         if adj == 'cmip':
-            vars[col] = convolve_step(df[col], annual=False)
+            dv[col] = convolve_step(df[col], annual=False)
         elif adj == 'exp':
             if val == 'none':
-                vars[col] = df[col].to_numpy()  # simple copy  
+                dv[col] = df[col].to_numpy()  # simple copy  
             elif val == 'cmip':
-                vars[col] = convolve_step(df[col], annual=False)
+                dv[col] = convolve_step(df[col], annual=False)
             elif val < 0.:  # no change, equivalent to doing nothing
-                vars[col] = df[col].to_numpy()  # simple copy
+                dv[col] = df[col].to_numpy()  # simple copy
             elif val == 0.:  # use the cmip model
-                vars[col] = convolve_step(df[col], annual=False)
+                dv[col] = convolve_step(df[col], annual=False)
             else:
                 step = get_simple_step(n, val)
-                vars[col] = convolve_step(df[col], step)
+                dv[col] = convolve_step(df[col], step)
         elif adj == 'lag':
             val = int(val)
-            vars.iloc[val:, i] = df[col].iloc[:n-val]
+            dv.iloc[val:, i] = df[col].iloc[:n-val]
         else:  # no change
-            vars[col] = df[col]
-    vars.fillna(0, inplace=True)
-    return vars  
+            dv[col] = df[col]
+    dv.fillna(0, inplace=True)
+    return dv  
 
 def adjust_combined(df, adjs):
     cols = dict(vol=['vol'], solar=['solar'], 
@@ -416,21 +416,21 @@ def optimize_adjustments(df=None, passes=20):
             another pass.
             '''
             print(col)
-            vars = df[var_cols].copy()
+            dv = df[var_cols].copy()
             remain = list(cols.keys())
-            remain.remove(col)
+            remain.remove(col)  # remaining columns not being optimized
             for r in remain:  # revert remaining cols to previous best
-                vars[cols[r]] = adjust_vars(df[cols[r]], 'exp',
+                dv[cols[r]] = adjust_vars(df[cols[r]], 'exp',
                                             previous.exp[r])
-                vars[cols[r]] = adjust_vars(vars[cols[r]], 'lag',
+                dv[cols[r]] = adjust_vars(dv[cols[r]], 'lag',
                                             previous.lag[r])
             for exp in vals['exp']:
                 rexp = adjust_vars(df[cols[col]], 'exp', exp)
                 for lag in vals['lag']:
-                    vars[cols[col]] = adjust_vars(rexp, 'lag', lag)
-                    c = fit(df.flat, vars[var_cols])
-                    vars[var_cols] *= c[:-1]
-                    residual = df.flat - vars[var_cols].sum(axis=1) - c[-1]
+                    dv[cols[col]] = adjust_vars(rexp, 'lag', lag)
+                    c = fit(df.flat, dv[var_cols])
+                    dv[var_cols] *= c[:-1]
+                    residual = df.flat - dv[var_cols].sum(axis=1) - c[-1]
                     tests[lag] = residual.std()
                 tests /= original
                 # find best lag
