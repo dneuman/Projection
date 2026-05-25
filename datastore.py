@@ -49,6 +49,11 @@ def make_spec(spec: dict):
     sType = namedtuple('sType', list(spec))
     return sType(**spec)
 
+def date_string(d):
+    """ Return date string from a tuple of (year, month)
+    """
+    return f'{d[0]}-{d[1]}-01'
+
 def date_index(start, end, freq='MS'):
     """
     Get Pandas DateTime index with the supplied start and end dates
@@ -177,12 +182,11 @@ def update_special(f: str):
               float_format='%.4f', date_format='%Y-%m-%d')
     return df
     
-def load_modern(f: str, annual=False):
+def load_modern(f: str):
     """ Return files that have been processed as
         tab-delimited files
 
         f: str, name of data set
-        annual: bool, return annual data, default False
     """
     spec = make_spec(dst.specs[f])
     fname = spec.file_name
@@ -195,36 +199,26 @@ def load_modern(f: str, annual=False):
         df[dn] += dst.specs['pie_offset']  # pre-industrial era
     if hasattr(df.index, 'month'):
         counts = df[df.columns[0]].groupby(df.index.year).count()
-        if annual:
-            low_yrs = counts.loc[counts < 12].index.values
-            if len(low_yrs) < 3:
-                # if there are more than 2 low_counts, it means that
-                # only annual data is given.
-                for y in low_yrs:
-                    i = df.loc[df.index.year==y].index
-                    df.drop(index=i, inplace=True)
-                df = df.groupby(df.index.year).mean()
-        else: # return monthly data
-            high_yrs = counts.loc[counts > 24].index.values
-            if len(high_yrs) > 2 : # it is daily data
-                df['m'] = df.index.strftime('%Y-%m-01')
-                df = df.groupby('m').mean()
-                df.index = pd.to_datetime(df.index)
+        high_yrs = counts.loc[counts > 24].index.values
+        if len(high_yrs) > 2 : # it is daily data
+            df['m'] = df.index.strftime('%Y-%m-01')
+            df = df.groupby('m').mean()
+            df.index = pd.to_datetime(df.index)
     df.spec = ''  # avoid warning for setting columns
     df.spec = spec
     return df
 
-def load_special(f: str, annual=False):
+def load_special(f: str):
     """ Return files that have been processed as
         tab-delimited files
 
         f: str, name of data set
-        annual: bool, return annual data, default False
     """
     if f=='stratvol':
-        df = load_modern(f, annual)
+        df = load_modern(f)
         return df
-    
+    else:
+        raise Exception(f'"{f}" not a known data source.')
 
 def update_list():
     """Update modern temperature data files.
@@ -285,19 +279,6 @@ def load_processed(f: str):
     df.spec = spec
     return df
 
-def load_special(f: str):
-    """
-    Load data requiring special processing
-    Parameters
-    ----------
-    f: str Name of data
-
-    Returns
-    -------
-    pandas dataframe
-    """
-    raise Exception(f'"{f}" not a known data source.')
-
 def get_nino(ix):
     """ Return the requested nino index
     """
@@ -316,7 +297,7 @@ def get_nino(ix):
     nino.src = src
     return nino
 
-def calc_volcano(end=None, annual=False):
+def calc_volcano(end=None):
     """
     Retrieve aerosol data and turn it into a volcanic aerosol forcing time
     series. Use seasonal solar variability, and albedo at each latitude to
@@ -350,8 +331,6 @@ def calc_volcano(end=None, annual=False):
         end = last
     elif hasattr(end, 'month'):
         end = (end.year, end.month)
-    elif annual:
-        end = (end, 12)
     dates = date_index(start, end)
     
     # new dataframe with date index
@@ -426,26 +405,24 @@ class _DataSource:
         keys = list(self.specs.keys())[2:]
         # add dataframes as methods to get with . notation
         for k in keys:
-            self.__dict__.update({k: lambda f=k, annual=True: self._request(f, annual)})
+            self.__dict__.update({k: lambda f=k: self._request(f)})
 
-    def _pull(self, f, annual=False):
+    def _pull(self, f):
         """ Pull data from data file and return data frame
         """
         if f in self.specs['modern']:
-            return load_modern(f, annual)
+            return load_modern(f)
         elif f in self.specs['special']:
             return load_special(f)
         else:
             return load_processed(f)
 
-    def _request(self, f, annual=False):
+    def _request(self, f):
         """ Return a copy of requested data frame given string name
         """
         if f in self.frames:
-            has_month = hasattr(self.frames[f].index[0], 'month')
-            if annual == (not has_month):
-                return self.frames[f].copy()
-        r = self._pull(f, annual)
+            return self.frames[f].copy()
+        r = self._pull(f)
         # tell dataframe what new properties to copy with .copy()
         r._metadata.extend(self._meta)
         r.index.name = f

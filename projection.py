@@ -28,8 +28,8 @@ yn, mn, dn, en, sn = ['Year', 'Month', 'Data', 'Error', 'Smooth']
 
 # %% Data Tools
 
-def get_step(n: int, annual: bool=True):
-    """ Return annual (default) or monthly warming curve due to an energy
+def get_step(n: int):
+    """ Return monthly warming curve due to an energy
         change based on Caldeira and Myhrvold 2013, Using 3 exponent model 
         with median values:
         
@@ -44,14 +44,11 @@ def get_step(n: int, annual: bool=True):
         
         n: int
             Number of years of step change values
-            
-        annual: bool
-            (Default True) True if annual, False if monthly
     """
     # f(t) = 1 - (th0 e^-t/ta0 + th1 e^-t/ta1 + th2 e^t/ta2)
     th = np.array([.226, .354, .409 ])  # median values
     ta = np.array([.586, 7.15, 237.7])
-    period = {True: 1, False: 1/12}[annual]
+    period = 1/12
     t = np.arange(0, n*period, period)
     ones = np.ones((len(th), len(t)))
     a = (ones * t).T / ta
@@ -76,18 +73,15 @@ def get_simple_step(n: int, r: float)->pd.Series:
     y = 1. - np.exp(-t/r)
     return pd.Series(y, t, name='Step')
 
-def convolve_step(data: pd.Series, 
-                     step: pd.Series=None, 
-                     annual: bool=True):
+def convolve_step(data: pd.Series, step: pd.Series=None):
     """ Convolve data with forcing impulse.
         Assumes impulse has +/- values as well.
 
         data: Series
         impulse: DataFrame
-        monthly: boolean  True if monthly data present, default False
     """
     if step is None:
-        step = get_step(len(data), annual=annual)
+        step = get_step(len(data))
     n = len(data)
     kernel = np.zeros(2 * n - 1)
     change = data.copy()
@@ -201,22 +195,16 @@ def chow(res, res1, res2, k, p=0.05):
                   index=['Chow', 'p', 'DoF1', 'DoF2'])
     return r
 
-def fit(data, vars):
-    ''' Fit a set of variables to data
+def fit(data, vals):
+    ''' Fit a set of values to data
     
-        data and vars must have the same number of rows. Returns the scaled
-        vars data, with a column containing a constant.
+        data and vals must have the same number of rows. Returns a multiplier
+        that best fits vals to data
     '''
     n = len(data)
-    A = np.hstack([vars.to_numpy(), np.ones((n, 1))])
+    A = np.hstack([vals.to_numpy(), np.ones((n, 1))])
     c = np.linalg.lstsq(A, data.to_numpy(), rcond=None)
     return c[0]
-
-def date_string(d):
-    """ Return date string from a tuple of (year, month)
-    """
-    return f'{d[0]}-{d[1]}-01'
-
 
 def fft(ds, mult=None):
     ''' 
@@ -306,7 +294,7 @@ def compile_vars(source='hadcrut', start='1990-01-01'):
     """ Return DataFrame containing temperature, trend line, detrended 
         temperature, and environmental factors that might affect temperature.
     """
-    temp = ds.load_modern(source, annual=False)    
+    temp = ds.load_modern(source)    
     end = temp.index[-1]
     start = pd.to_datetime(start) # Start year for analysis
     df = pd.DataFrame(index=temp.loc[start:end].index)
@@ -318,10 +306,10 @@ def compile_vars(source='hadcrut', start='1990-01-01'):
     df['lowess'] = tr.lowess(df.temp, pts=15*12)  # this is the local trend, not a line
     df['flat'] = df.temp - df.lowess
  
-    df['vol'] = dst.stratvol(annual=False).loc[start:end]
-    df['solar'] = dst.solar(annual=False).loc[start:end]
+    df['vol'] = dst.stratvol().loc[start:end]
+    df['solar'] = dst.solar().loc[start:end]
     df.solar -= df.solar.mean()  # remove offset
-    enso = dst.enso(annual=False).loc[start:end]
+    enso = dst.enso().loc[start:end]
     enso -= enso.mean()
     df[enso.columns] = enso
         
@@ -345,22 +333,25 @@ def adjust_vars(df, adj, val):
     dv[cols] = 0.0
     for i, col in enumerate(cols):
         if adj == 'cmip':
-            dv[col] = convolve_step(df[col], annual=False)
+            dv[col] = convolve_step(df[col])
         elif adj == 'exp':
             if val == 'none':
                 dv[col] = df[col].to_numpy()  # simple copy  
             elif val == 'cmip':
-                dv[col] = convolve_step(df[col], annual=False)
+                dv[col] = convolve_step(df[col])
             elif val < 0.:  # no change, equivalent to doing nothing
                 dv[col] = df[col].to_numpy()  # simple copy
             elif val == 0.:  # use the cmip model
-                dv[col] = convolve_step(df[col], annual=False)
+                dv[col] = convolve_step(df[col])
             else:
                 step = get_simple_step(n, val)
                 dv[col] = convolve_step(df[col], step)
         elif adj == 'lag':
             val = int(val)
-            dv.iloc[val:, i] = df[col].iloc[:n-val]
+            if val<0:  # advance data
+                dv.iloc[:n+val, i] = df[col].iloc[-val:]
+            else:   # delay data
+                dv.iloc[val:, i] = df[col].iloc[:n-val]
         else:  # no change
             dv[col] = df[col]
     dv.fillna(0, inplace=True)
@@ -393,16 +384,17 @@ def optimize_adjustments(df=None, passes=20):
     var_cols = 'vol solar N12 N3 N4 N34'.split()
     cols = dict(vol=['vol'], solar=['solar'], 
                 enso='N12 N3 N4 N34'.split())
+    #  specify which values you want to test
     vals = dict(exp=np.arange(-.1, 10.15, 0.1),
-                lag=np.arange(0, 13, dtype=int))
+                lag=np.arange(-5, 13, dtype=int))
     outcome = pd.DataFrame(index=cols.keys(), 
                            columns='exp lag result'.split())
     outcome.result = 1.0
     outcome.lag = 0
     outcome.exp = -0.1
     previous = outcome.copy()
-    tests = pd.Series(index=vals['lag'], data=9.)
-    original = df.flat.std()
+    tests = pd.Series(index=vals['lag'], data=999.)  # all lag tests at one exp
+    original_std = df.flat.std()
     for p in range(passes):
         for col in cols.keys():
             ''' 
@@ -427,20 +419,23 @@ def optimize_adjustments(df=None, passes=20):
             for exp in vals['exp']:
                 rexp = adjust_vars(df[cols[col]], 'exp', exp)
                 for lag in vals['lag']:
+                    # col will have multiple columns when calculating values
+                    # for 'enso', therefore the calculations must work
+                    # for one or multiple columns.
                     dv[cols[col]] = adjust_vars(rexp, 'lag', lag)
                     c = fit(df.flat, dv[var_cols])
                     dv[var_cols] *= c[:-1]
                     residual = df.flat - dv[var_cols].sum(axis=1) - c[-1]
                     tests[lag] = residual.std()
-                tests /= original
+                tests /= original_std
                 # find best lag
-                m =tests.min(skipna=True)
                 mi = tests.idxmin(skipna=True)
+                m = tests[mi]
                 if m < outcome.result[col]:
                     outcome.loc[col, 'result'] = m
                     outcome.loc[col, 'lag'] = mi  # best lag
                     outcome.loc[col, 'exp'] = exp # current exp value
-                tests.loc[:] = 9.
+                tests.loc[:] = 999.  #reset test scores
         print(f'\n==== Pass {p} ====\n{outcome}\n')
         test = outcome.result.sum() - previous.result.sum()
         if abs(test) < .000001:
@@ -449,7 +444,20 @@ def optimize_adjustments(df=None, passes=20):
     print(f'\n{outcome}\n')
     return outcome
     
-def fit_vars(df=None, adjs=None, annual=False, verbose=False):
+def fit_vars(df=None, adjs=None, verbose=False):
+    """ Fit the natural influences from df using the adjustments in adj. If
+        none are provided, create those tables from scratch.
+        
+        df: Pandas.DataFrame, contains columns for temperature and natural
+            influences.
+        adjs: Pandas.DataFrame, contains lag and exponential adjustments for
+            the natural influences returned by `optimize_adjustments()`.
+        verbose: bool (default False), print more info on periodic signal
+            removal if True
+        
+        Returns the dataframe df with the natural influences combined in
+        column 'vars' removed in the column 'real'. 
+    """
     # Important columns:
         # temp: temperature
         # lowess: local weighted trend calculated from the temperature
@@ -467,6 +475,9 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     if adjs is None:
         adjs = optimize_adjustments(df)
     n = len(df)
+    # create a place to recover the multipliers
+    df.multipliers = ''
+    df.multipliers = pd.Series(index=influences)
     # adjust natural influences for best fit
     df = adjust_combined(df, adjs)
     # get trend line
@@ -477,6 +488,12 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     print(f'Original standard deviation was: {sigma:.4f}°C')
     c = fit(df.flat, df[influences])  # Simultaneous Least Squares Fit
     df[influences] *= c[:-1]
+    df.multipliers[influences] = c[:-1]
+    e_sum = df.multipliers[cols['enso']].sum()
+    e_index = df.multipliers[cols['enso']]/e_sum
+    print(df.multipliers)
+    print(e_index)
+    
     df['enso'] = df[cols['enso']].sum(axis=1)
     df['vars'] = df[influences].sum(axis=1) + c[-1]  # all variables with offset
     df['reduced'] = df.flat - df.vars
@@ -544,8 +561,6 @@ def fit_vars(df=None, adjs=None, annual=False, verbose=False):
     r2 = tls.R2(df.flat.values, df.vars.values)
     print(f'R² value is {r2:.3f}')
     
-    if annual:
-        df = df.groupby(df.index.year).mean()
     return df  
     
 def get_future(adjs):
@@ -644,7 +659,9 @@ def get_AR(data, N, full=False):
         df = get_rho(idata)
         lags = df.loc[np.abs(df.mu)>=df.sigma].index
         print(f'\n{df}\n')
-        
+    # remove warning for not explicitly using these variables
+    del model
+    del likelihood    
     return df
 
 def get_ARIMA(s, N, use_diff=True):
@@ -845,7 +862,7 @@ def label_years(ax, data, sigma, years=None, labels=None):
     
 # %% Plotting Functions
 
-def plotSlope(annual=False):
+def plotSlope():
     ''' Plot lowess slope showing change because of starting point
     '''
     df = compile_vars(start='1980-01-01')
@@ -853,14 +870,10 @@ def plotSlope(annual=False):
     yf2 = df.loc['1992-04-01':'2015-01-01']
     yf1.start = 1980
     yf2.start = 1992
-    if annual:
-        df = df.groupby(df.index.year).mean()
-        df.Year = df.index
-    period = {True: 'annual', False: 'monthly'}[annual]
     rate = 10
     ax = new_axes('slope', 
                   'Locally Weighted Slope of Global Temperature', 
-                  f'{df.spec.name} {period} change from pre-industrial (°C)')
+                  f'{df.spec.name} monthly change from pre-industrial (°C)')
     ax.plot(df.temp, alpha=.3, label='Temperature')
     ax.plot(df.lowess, label='Locally Weighted Slope (LOWESS)')
     m, b = np.polyfit(yf2.Year, yf2.lowess, 1)
@@ -870,7 +883,7 @@ def plotSlope(annual=False):
     
     ax = new_axes('slope_compare',
                   'Slope Estimate Depends on Starting Point',
-                  f'{df.spec.name} {period} change from pre-industrial (°C)')
+                  f'{df.spec.name} monthly change from pre-industrial (°C)')
     ax.plot(df.temp, alpha=.3, label='Temperature')
     dashed = (0, (5, 10))
     for yf, c in zip([yf1, yf2], ['C1', 'C2']):
@@ -888,7 +901,7 @@ def plotSlope(annual=False):
         
     plt.show()
 
-def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
+def plotTempTrend(df=None, adjs=None, col='real'):
     """ Plot the monthly temperature trend to 2065
     """
     def get_date(y):
@@ -913,7 +926,7 @@ def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
         
     # Do analysis
     if df is None:
-        df = fit_vars(adjs=adjs, annual=annual)
+        df = fit_vars(adjs=adjs)
     # Important columns:
         # temp: temperature
         # lowess: local weighted trend calculated from the temperature
@@ -927,8 +940,6 @@ def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
     start = df.index[0].year
     end = 2065
     xp = np.arange(start, end+1)  # 
-    period = 'annual' if annual else 'Monthly'
-    alpha = .5 if annual else .3
     
     def plot(y, yt, ytp, win_name='projection', title_app=''):
         """ Plot values against trend and variance
@@ -947,8 +958,8 @@ def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
         fig = plt.figure(win_name, clear=True)
         ax = fig.add_subplot(111)
         ax.set_ylim(ymin, 2.7)
-        ax.plot(df.Year, y, 'k+', alpha=alpha, 
-                label=f'{period} Temperature') # data
+        ax.plot(df.Year, y, 'k+', alpha=.3, 
+                label='Monthly Temperature') # data
         ax.plot(xp, ytp, 'b-', lw=1) # trend
         ax.fill_between(xp, ytp+2*sigma, ytp-2*sigma, color='b', alpha=.12)
         ax.fill_between(xp, ytp+sigma, ytp-sigma, color='b', alpha=.12)
@@ -965,9 +976,8 @@ def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
                 "Natural Influences are El Niño, volcanic activity, and solar.")
         ax.text(start, 2.2, text, size='large', ha='left')
         rate = 10
-        change = {True:'annual', False:'monthly'}[annual]
         ax.text(get_date(1.75), 1.75, f"{slope*rate:.3f}°C/decade", va='top')
-        subtitle = f"{df.spec.name} {change} change from pre-industrial (°C)"
+        subtitle = f"{df.spec.name} monthly change from pre-industrial (°C)"
         tls.titles(ax, f"Temperature Projection to {end}",
                    f"{subtitle}{title_app}")
         tls.byline(ax)
@@ -1007,23 +1017,22 @@ def plotTempTrend(df=None, adjs=None, annual=False, col='real'):
     plt.show()
     return
 
-def plotTempVar(df=None, adjs=None, annual=False):
+def plotTempVar(df=None, adjs=None):
     """ Plots variability of global temperature with and without
         external variation (ENSO, volcanic sulphates, and solar) removed.
     """
     if df is None:
         df = compile_vars()
     if not hasattr(df, 'detrend'):
-        df = fit_vars(df, adjs=adjs, annual=annual)
+        df = fit_vars(df, adjs=adjs)
     slope, intercept = np.polyfit(df.Year, df.temp, 1)
     raw_detrend = df.temp - slope * df.Year - intercept
     labels = max_years(raw_detrend)
-    p = {True:'Annual', False:'Monthly'}[annual]
     
     # Plot temperature and Nino Index
-    axs = new_fig_rows(f'Deviation-{p}',
+    axs = new_fig_rows('Deviation',
                        "Temperature Deviation from Trend",
-                       f"{df.spec.name} {p} Global Temperature (ºC)",
+                       f"{df.spec.name} Monthly Global Temperature (ºC)",
                        num=2)
     sigma = raw_detrend.std()
     ax = axs[0]
@@ -1250,7 +1259,7 @@ def plotWarmingDemo():
                     arrowprops=dict(width=2, headwidth=7, headlength=5))
     plt.show()
         
-def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
+def plotRate(df=None, col=None, adjs=None, stdDevs=2.0,
              name='Slopes', decorrelated=False, verbose=False):
     """ Plot charts determining the global temperature warming rate within
         the dataset to see if there is any statistically relevant acceleration.
@@ -1259,6 +1268,7 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     """
     rt = ''
     reduced = True
+    
     if df is None:
         df = compile_vars()
         if adjs is None:
@@ -1266,12 +1276,7 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
         else:
             df = fit_vars(df, adjs)
             reduced = True
-
-    if annual:
-        df = df.groupby(df.index.year).mean()
-        df[yn] = df.index
-    else:
-        tr.convertYear(df)
+    tr.convertYear(df)
     if not col:
         if reduced:
             col = 'real'
@@ -1290,8 +1295,8 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     
     # === Plot since start ===
     
-    pt = 'Annual' if annual else 'Monthly'  # period text
-    interval = 1 if annual else 12  # period index
+    pt = 'Monthly'  # period text
+    interval = 12  # period index
     
     if verbose:  # plot trend for full period
         ylabel = (f'{df.spec.name} {pt} Change from Pre-Industrial,'+
@@ -1303,7 +1308,7 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
         ax.plot(lsq.xline, lsq.yline, 'b-', lw=2)  # trend
         ax.plot(x, lsq.y1, 'b-', lw=1) # lower limit
         ax.plot(x, lsq.y2, 'b-', lw=1) # upper limit
-        ax.plot(x, y, 'k+', alpha=(0.3+.3*annual), lw=2)     # data
+        ax.plot(x, y, 'k+', alpha=0.3, lw=2)     # data
         # label chart
         error = stdDevs * lsq.sigma
         text = f'Trend: {lsq.slope*10:.3f}±{error*10:.3f} °C/decade'
@@ -1325,10 +1330,9 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
             x = d[yn].to_numpy()
             y = d[col].to_numpy()
             lsq = tr.analyzeData(x, y, stdDevs)  # Analyse data
-            ax.plot(x, y, 'k+', alpha=(0.3+.3*annual), lw=1)     # data
-            if not annual:
-                mx, my = tr.movingAverage(x, y, 1*12)  # 1-year moving average
-                ax.plot(mx, my, 'g-', lw=2)        # moving average
+            ax.plot(x, y, 'k+', alpha=0.3, lw=1)     # data
+            mx, my = tr.movingAverage(x, y, 1*12)  # 1-year moving average
+            ax.plot(mx, my, 'g-', lw=2)        # moving average
             ax.plot(lsq.xline, lsq.yline, 'b-', lw=2)  # trend
             ax.plot(x, lsq.y1, 'b-', lw=1) # lower limit
             ax.plot(x, lsq.y2, 'b-', lw=1) # upper limit
@@ -1381,7 +1385,7 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
             stats.loc[d, sxy] = lsq.sxy
             
     # plot the before and after slopes
-    pt2 = {True:'Year', False:'Month'}[annual]
+    pt2 = 'Month'
     ax = new_axes(name=name,
                   title=f'Comparing Trends Before and After Each {pt2}',
                   ylabel=f'{df.spec.name} Trend in °C per decade {rt}')
@@ -1404,7 +1408,7 @@ def plotRate(df=None, col=None, adjs=None, annual=False, stdDevs=2.0,
     return
         
 def plotBreak(point, data, continuous=True,
-              annual=False, rt='', stdDevs=2., ct=False):
+              rt='', stdDevs=2., ct=False):
     ''' Plot the slopes before and after a supplied break point. The point
         must be in integer or floating point years (fractional).
         
@@ -1413,14 +1417,10 @@ def plotBreak(point, data, continuous=True,
             data.
     '''
     df = pd.DataFrame(data.values, data.index, columns=[dn])
-    if annual and hasattr(df.index, 'year'):
-        df = df.groupby(df.index.year).mean()
-        df[yn] = df.index
-    else:
-        tr.convertYear(df)
+    tr.convertYear(df)
     
     rt1 = '_Reduced' if (rt != '') else ''
-    pt = 'Annual' if annual else 'Monthly'  # period text
+    pt = 'Monthly'  # period text
 
     t0 = df.loc[df[yn] <= point]
     t1 = df.loc[df[yn] >= point]
@@ -1640,11 +1640,17 @@ ds.update_modern(tmp)
 ds.update_modern('enso')
 ds.update_modern('solar')
 df = compile_vars(source=tmp)
+
+df.iloc[2, 1] = df.iloc[1:4, 1].mean()  # smooth anomoly at 1990-03-01
+  or
+df = df.iloc[12:].copy()  # drop first year because of anomoly
+
 adj = optimize_adjustments(df)  # so you only have to do this once
 df = fit_vars(df, adjs=adj)
 plotInfluences(df, adj)
 plotTempVar(df, adj)  # check data
-
+plotRate(df, adjs=adj)
+plotBreak(2010, df.real)
 
 """
     
